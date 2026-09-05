@@ -2,6 +2,23 @@ import yfinance as yf
 import pandas as pd
 import streamlit as st
 import os, json
+from dotenv import load_dotenv
+load_dotenv()
+FMP_KEY = os.getenv("FMP_KEY")
+
+def get_fmp_movers():
+    try:
+        url1 = f"https://financialmodelingprep.com/stable/biggest-gainers?apikey={FMP_KEY}"
+        url2 = f"https://financialmodelingprep.com/stable/most-actives?apikey={FMP_KEY}"
+        import requests
+        r1 = requests.get(url1, timeout=10).json()
+        r2 = requests.get(url2, timeout=10).json()
+        t1 = [s["symbol"] for s in r1 if "symbol" in s]
+        t2 = [s["symbol"] for s in r2 if "symbol" in s]
+        combined = list(dict.fromkeys(t1 + t2))
+        return combined
+    except:
+        return []
 from concurrent.futures import ThreadPoolExecutor
 ALL_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AVGO', 'AMD', 'ORCL', 'PLTR', 'CRM', 'SNOW', 'DDOG', 'NET', 'ARM', 'SMCI', 'SOFI', 'MSTR', 'COIN', 'NFLX', 'DIS', 'ROKU', 'SPOT', 'UBER', 'ABNB', 'SQ', 'PYPL', 'HOOD', 'NU', 'V', 'MA', 'JPM', 'BAC', 'WFC', 'GS', 'MS', 'XOM', 'CVX', 'COP', 'OXY', 'JNJ', 'PFE', 'MRNA', 'LLY', 'ABBV', 'BMY', 'MRK', 'AMGN', 'COST', 'WMT', 'TGT', 'HD', 'LOW', 'BA', 'LMT', 'RTX', 'NOC', 'NIO', 'RIVN', 'LCID', 'XPEV', 'F', 'GM', 'INTC', 'QCOM', 'MU', 'AMAT', 'KLAC', 'TXN', 'ADI', 'MRVL', 'ENPH', 'FSLR', 'ALAB', 'AEHR', 'IOT', 'COHR', 'SITM', 'MARA', 'RIOT', 'CRWD', 'PANW', 'ZM', 'SHOP', 'BABA', 'JD', 'PDD', 'RKLB', 'ASTS', 'GME', 'AMC', 'IREN', 'CLSK', 'HUT', 'IBIT', 'ARKK', 'ARKG', 'IONQ', 'RGTI', 'QUBT', 'ACHR', 'JOBY', 'WKHS', 'NKLA', 'LAZR', 'LYFT', 'ARGX', 'ASML', 'AXON', 'AVXL', 'AZPN', 'ASAN', 'ARWR', 'ARVN', 'AUPH', 'APLS', 'AGIO', 'VRTX', 'REGN', 'BIIB', 'ILMN', 'ALNY', 'BMRN', 'CRSP', 'BEAM', 'EDIT', 'NTLA', 'JAZZ']
 WATCHLIST_FILE = os.path.expanduser("~/stock_screener/watchlist.json")
@@ -50,6 +67,8 @@ with st.sidebar:
     min_price = col3.number_input("Min $", value=1)
     max_price = col4.number_input("Max $", value=1000)
     min_vol = st.number_input("Min Vol Spike", value=0.0, step=0.5)
+    use_live = st.checkbox("Discover live movers (FMP)", value=False)
+    show_ai = st.checkbox("Enable AI Analysis", value=False)
     extra = st.text_input("Look up any ticker", "").upper().strip()
     run = st.button("Run Scan", use_container_width=True)
     st.caption(f"Scanning {len(ALL_TICKERS)} stocks")
@@ -72,9 +91,17 @@ with tab1:
             else:
                 st.error(f"Could not find {extra}")
         else:
+            tickers_to_scan = ALL_TICKERS
+            if use_live:
+                live = get_fmp_movers()
+                if live:
+                    tickers_to_scan = list(dict.fromkeys(live + ALL_TICKERS))
+                    st.success(f"Added {len(live)} live movers from FMP")
+                else:
+                    st.warning("Could not fetch live movers, using default list")
             bar = st.progress(0, text="Scanning all stocks...")
             with ThreadPoolExecutor(max_workers=10) as executor:
-                all_data = list(executor.map(get_stock_data, ALL_TICKERS))
+                all_data = list(executor.map(get_stock_data, tickers_to_scan))
             bar.empty()
             results = []
             for d in all_data:
@@ -87,22 +114,32 @@ with tab1:
             if results:
                 results = sorted(results, key=lambda x: x["chg"], reverse=True)
                 c1,c2,c3 = st.columns(3)
-                c1.metric("Scanned", len(ALL_TICKERS))
+                c1.metric("Scanned", len(tickers_to_scan))
                 c2.metric("Passed", len(results))
                 c3.metric("Strong Buys", sum(1 for r in results if r["rating"]=="STRONG BUY"))
                 st.divider()
                 for r in results:
                     label = f"{r["ticker"]} - ${round(r["price"],2)} - {r["chg"]}% - {r["rating"]}"
                     with st.expander(label):
-                        c1,c2,c3,c4 = st.columns(4)
+                        c1,c2,c3,c4,c5 = st.columns(5)
                         c1.metric("Price", f"${round(r["price"],2)}")
                         c2.metric("Change", f"{r["chg"]}%")
-                        c3.metric("Target", f"${r["target"]}")
-                        c4.metric("Vol Spike", f"{r["vol_spike"]}x")
-                        c5,c6,c7 = st.columns(3)
-                        c5.metric("52W High", f"${r["high"]}")
-                        c6.metric("52W Low", f"${r["low"]}")
-                        c7.metric("Sector", r["sector"])
+                        c3.metric("Rating", r["rating"])
+                        c4.metric("Target", f"${r["target"]}")
+                        c5.metric("Vol Spike", f"{r["vol_spike"]}x")
+                        c6,c7,c8 = st.columns(3)
+                        c6.metric("52W High", f"${r["high"]}")
+                        c7.metric("52W Low", f"${r["low"]}")
+                        c8.metric("Sector", r["sector"])
+                        if show_ai:
+                            import anthropic
+                            akey = os.getenv("ANTHROPIC_KEY")
+                            if akey:
+                                with st.spinner("Getting AI analysis..."):
+                                    client = anthropic.Anthropic(api_key=akey)
+                                    prompt = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
+                                    msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt}])
+                                st.info(msg.content[0].text)
                 st.download_button("Download CSV", pd.DataFrame(results).to_csv(index=False).encode(), "results.csv")
             else:
                 st.warning("No stocks found. Try wider filters.")
