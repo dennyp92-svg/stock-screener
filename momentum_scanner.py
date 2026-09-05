@@ -4,7 +4,10 @@ import streamlit as st
 import os, json
 from dotenv import load_dotenv
 load_dotenv()
-FMP_KEY = st.secrets.get("FMP_KEY", os.getenv("FMP_KEY"))
+try:
+    FMP_KEY = st.secrets.get("FMP_KEY", os.getenv("FMP_KEY"))
+except:
+    FMP_KEY = os.getenv("FMP_KEY")
 
 def get_fmp_movers():
     try:
@@ -32,6 +35,7 @@ def save_watchlist(wl):
     try:
         with open(WATCHLIST_FILE, "w") as wf: json.dump(wl, wf)
     except: pass
+@st.cache_data(ttl=120)
 def get_stock_data(ticker):
     try:
         stock = yf.Ticker(ticker)
@@ -69,8 +73,12 @@ with st.sidebar:
     min_vol = st.number_input("Min Vol Spike", value=0.0, step=0.5)
     use_live = st.checkbox("Discover live movers (FMP)", value=False)
     show_ai = st.checkbox("Enable AI Analysis", value=False)
+    auto_ai_strong = st.checkbox("Auto-run AI on Strong Buy stocks", value=False)
     extra = st.text_input("Look up any ticker", "").upper().strip()
     run = st.button("Run Scan", use_container_width=True)
+    if "results" not in st.session_state:
+        st.session_state.results = None
+        st.session_state.tickers_scanned = 0
     st.caption(f"Scanning {len(ALL_TICKERS)} stocks")
 with tab1:
     st.title("Stock Scanner Pro")
@@ -100,7 +108,7 @@ with tab1:
                 else:
                     st.warning("Could not fetch live movers, using default list")
             bar = st.progress(0, text="Scanning all stocks...")
-            with ThreadPoolExecutor(max_workers=10) as executor:
+            with ThreadPoolExecutor(max_workers=30) as executor:
                 all_data = list(executor.map(get_stock_data, tickers_to_scan))
             bar.empty()
             results = []
@@ -113,14 +121,34 @@ with tab1:
                         results.append(d)
             if results:
                 results = sorted(results, key=lambda x: x["chg"], reverse=True)
+                st.session_state.results = results
+                st.session_state.tickers_scanned = len(tickers_to_scan)
                 c1,c2,c3 = st.columns(3)
                 c1.metric("Scanned", len(tickers_to_scan))
                 c2.metric("Passed", len(results))
                 c3.metric("Strong Buys", sum(1 for r in results if r["rating"]=="STRONG BUY"))
                 st.divider()
-                for r in results:
+                if st.button("Analyze Top 5 with AI"):
+                    try:
+                        akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
+                    except:
+                        akey = os.getenv("ANTHROPIC_KEY")
+                    if akey:
+                        import anthropic
+                        client = anthropic.Anthropic(api_key=akey)
+                        for r in results[:5]:
+                            with st.spinner(f"Analyzing {r['ticker']}..."):
+                                prompt = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
+                                msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=150, messages=[{"role":"user","content":prompt}])
+                            st.markdown(f"**{r['ticker']}** - ${round(r['price'],2)} - {r['chg']}%")
+                            st.info(msg.content[0].text)
+                st.divider()
+                show_only_strong = st.checkbox("Show only Strong Buy", value=False, key="filter_run2")
+                display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
+                for r in display_results:
                     label = f"{r["ticker"]} - ${round(r["price"],2)} - {r["chg"]}% - {r["rating"]}"
-                    with st.expander(label):
+                    auto_expand = auto_ai_strong and r["rating"]=="STRONG BUY"
+                    with st.expander(label, expanded=auto_expand):
                         c1,c2,c3,c4,c5 = st.columns(5)
                         c1.metric("Price", f"${round(r["price"],2)}")
                         c2.metric("Change", f"{r["chg"]}%")
@@ -131,9 +159,12 @@ with tab1:
                         c6.metric("52W High", f"${r["high"]}")
                         c7.metric("52W Low", f"${r["low"]}")
                         c8.metric("Sector", r["sector"])
-                        if show_ai:
+                        if show_ai or (auto_ai_strong and r["rating"]=="STRONG BUY"):
                             import anthropic
-                            akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
+                            try:
+                                akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
+                            except:
+                                akey = os.getenv("ANTHROPIC_KEY")
                             if akey:
                                 with st.spinner("Getting AI analysis..."):
                                     client = anthropic.Anthropic(api_key=akey)
@@ -143,6 +174,40 @@ with tab1:
                 st.download_button("Download CSV", pd.DataFrame(results).to_csv(index=False).encode(), "results.csv")
             else:
                 st.warning("No stocks found. Try wider filters.")
+    elif st.session_state.results:
+        results = st.session_state.results
+        tickers_to_scan = list(range(st.session_state.tickers_scanned))
+        c1,c2,c3 = st.columns(3)
+        c1.metric("Scanned", st.session_state.tickers_scanned)
+        c2.metric("Passed", len(results))
+        c3.metric("Strong Buys", sum(1 for r in results if r["rating"]=="STRONG BUY"))
+        st.divider()
+        if st.button("Analyze Top 5 with AI", key="analyze_saved"):
+            try:
+                akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
+            except:
+                akey = os.getenv("ANTHROPIC_KEY")
+            if akey:
+                import anthropic
+                client = anthropic.Anthropic(api_key=akey)
+                for r in results[:5]:
+                    with st.spinner(f"Analyzing {r["ticker"]}..."):
+                        prompt = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
+                        msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=150, messages=[{"role":"user","content":prompt}])
+                    st.markdown(f"**{r["ticker"]}** - ${round(r["price"],2)} - {r["chg"]}%")
+                    st.info(msg.content[0].text)
+        st.divider()
+        show_only_strong = st.checkbox("Show only Strong Buy", value=False)
+        display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
+        for r in display_results:
+            label = f"{r["ticker"]} - ${round(r["price"],2)} - {r["chg"]}% - {r["rating"]}"
+            with st.expander(label):
+                c1,c2,c3,c4,c5 = st.columns(5)
+                c1.metric("Price", f"${round(r["price"],2)}")
+                c2.metric("Change", f"{r["chg"]}%")
+                c3.metric("Rating", r["rating"])
+                c4.metric("Target", f"${r["target"]}")
+                c5.metric("Vol Spike", f"{r["vol_spike"]}x")
     else:
         st.info("Set filters in the sidebar and click Run Scan")
 with tab2:
