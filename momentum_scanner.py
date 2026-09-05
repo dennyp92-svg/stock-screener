@@ -58,6 +58,13 @@ def get_stock_data(ticker):
     except: pass
     return None
 st.set_page_config(page_title="Stock Scanner Pro", page_icon="📈", layout="wide")
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+""", unsafe_allow_html=True)
 watchlist = load_watchlist()
 tab1, tab2 = st.tabs(["📈 Scanner", "⭐ Watchlist"])
 with st.sidebar:
