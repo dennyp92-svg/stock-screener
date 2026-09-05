@@ -201,13 +201,30 @@ with tab1:
         display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
         for r in display_results:
             label = f"{r["ticker"]} - ${round(r["price"],2)} - {r["chg"]}% - {r["rating"]}"
-            with st.expander(label):
+            auto_expand2 = auto_ai_strong and r["rating"]=="STRONG BUY"
+            with st.expander(label, expanded=auto_expand2):
                 c1,c2,c3,c4,c5 = st.columns(5)
                 c1.metric("Price", f"${round(r["price"],2)}")
                 c2.metric("Change", f"{r["chg"]}%")
                 c3.metric("Rating", r["rating"])
                 c4.metric("Target", f"${r["target"]}")
                 c5.metric("Vol Spike", f"{r["vol_spike"]}x")
+                c6,c7,c8 = st.columns(3)
+                c6.metric("52W High", f"${r["high"]}")
+                c7.metric("52W Low", f"${r["low"]}")
+                c8.metric("Sector", r["sector"])
+                if show_ai or (auto_ai_strong and r["rating"]=="STRONG BUY"):
+                    import anthropic
+                    try:
+                        akey2 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
+                    except:
+                        akey2 = os.getenv("ANTHROPIC_KEY")
+                    if akey2:
+                        with st.spinner("Getting AI analysis..."):
+                            client2 = anthropic.Anthropic(api_key=akey2)
+                            prompt2 = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
+                            msg2 = client2.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt2}])
+                        st.info(msg2.content[0].text)
     else:
         st.info("Set filters in the sidebar and click Run Scan")
 with tab2:
