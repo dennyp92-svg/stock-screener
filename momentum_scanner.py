@@ -4,7 +4,7 @@ import streamlit as st
 import os, json
 from dotenv import load_dotenv
 load_dotenv()
-FMP_KEY = os.getenv("FMP_KEY")
+FMP_KEY = st.secrets.get("FMP_KEY", os.getenv("FMP_KEY"))
 
 def get_fmp_movers():
     try:
@@ -133,7 +133,7 @@ with tab1:
                         c8.metric("Sector", r["sector"])
                         if show_ai:
                             import anthropic
-                            akey = os.getenv("ANTHROPIC_KEY")
+                            akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
                             if akey:
                                 with st.spinner("Getting AI analysis..."):
                                     client = anthropic.Anthropic(api_key=akey)
