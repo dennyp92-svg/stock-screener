@@ -156,16 +156,18 @@ with tab1:
                     label = f"{r["ticker"]} - ${round(r["price"],2)} - {r["chg"]}% - {r["rating"]}"
                     auto_expand = auto_ai_strong and r["rating"]=="STRONG BUY"
                     with st.expander(label, expanded=auto_expand):
-                        c1,c2,c3,c4,c5 = st.columns(5)
+                        c1,c2 = st.columns(2)
                         c1.metric("Price", f"${round(r["price"],2)}")
                         c2.metric("Change", f"{r["chg"]}%")
+                        c3,c4 = st.columns(2)
                         c3.metric("Rating", r["rating"])
-                        c4.metric("Target", f"${r["target"]}")
-                        c5.metric("Vol Spike", f"{r["vol_spike"]}x")
-                        c6,c7,c8 = st.columns(3)
-                        c6.metric("52W High", f"${r["high"]}")
-                        c7.metric("52W Low", f"${r["low"]}")
-                        c8.metric("Sector", r["sector"])
+                        c4.metric("Vol Spike", f"{r["vol_spike"]}x")
+                        c5,c6 = st.columns(2)
+                        c5.metric("Target", f"${r["target"]}")
+                        c6.metric("Sector", r["sector"])
+                        c7,c8 = st.columns(2)
+                        c7.metric("52W High", f"${r["high"]}")
+                        c8.metric("52W Low", f"${r["low"]}")
                         if show_ai or (auto_ai_strong and r["rating"]=="STRONG BUY"):
                             import anthropic
                             try:
