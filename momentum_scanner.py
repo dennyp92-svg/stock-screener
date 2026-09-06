@@ -83,7 +83,7 @@ with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
     if "results" not in st.session_state:
         st.session_state.results = None
         st.session_state.tickers_scanned = 0
-    st.caption(f"Scanning {len(ALL_TICKERS)} stocks")
+    st.caption("Live market discovery enabled - real movers pulled fresh each scan")
 with tab1:
     st.title("Stock Scanner Pro")
     if run:
