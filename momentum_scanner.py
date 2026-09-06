@@ -67,17 +67,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 watchlist = load_watchlist()
 tab1, tab2 = st.tabs(["📈 Scanner", "⭐ Watchlist"])
-with st.sidebar:
-    st.subheader("Filters")
-    st.caption("% Change")
-    col1, col2 = st.columns(2)
+with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
+    col1, col2, col3 = st.columns(3)
     min_change = col1.number_input("Min %", value=0)
     max_change = col2.number_input("Max %", value=100)
-    st.caption("Price Range")
-    col3, col4 = st.columns(2)
-    min_price = col3.number_input("Min $", value=1)
-    max_price = col4.number_input("Max $", value=1000)
-    min_vol = st.number_input("Min Vol Spike", value=0.0, step=0.5)
+    min_vol = col3.number_input("Vol Spike", value=0.0, step=0.5)
+    col4, col5 = st.columns(2)
+    min_price = col4.number_input("Min $", value=1)
+    max_price = col5.number_input("Max $", value=1000)
     use_live = st.checkbox("Discover live movers (FMP)", value=False)
     show_ai = st.checkbox("Enable AI Analysis", value=False)
     auto_ai_strong = st.checkbox("Auto-run AI on Strong Buy stocks", value=False)
@@ -235,7 +232,7 @@ with tab1:
                             msg2 = client2.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt2}])
                         st.info(msg2.content[0].text)
     else:
-        st.info("Set filters in the sidebar and click Run Scan")
+        st.info("Tap Filters below to adjust settings, then click Run Scan")
 with tab2:
     st.title("My Watchlist")
     add_manual = st.text_input("Add ticker to watchlist", "").upper().strip()
