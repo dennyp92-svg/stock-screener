@@ -204,25 +204,6 @@ with tab1:
                                 st.info(msg.content[0].text)
                 st.download_button("Download CSV", pd.DataFrame(results).to_csv(index=False).encode(), "results.csv")
 
-                st.divider()
-                st.subheader("📧 Email These Results")
-                alert_email = st.text_input("Your email address", key="alert_email")
-                if st.button("Send Strong Buy Alert"):
-                    strong_buys = [r for r in results if r["rating"] == "STRONG BUY"]
-                    if not alert_email:
-                        st.error("Please enter an email address")
-                    elif not strong_buys:
-                        st.warning("No Strong Buy stocks to send right now")
-                    else:
-                        body_lines = ["Your Stock Scanner Pro Strong Buy Alert\n"]
-                        for r in strong_buys:
-                            body_lines.append(f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - Target ${r['target']}")
-                        body = "\n".join(body_lines)
-                        success, msg = send_email_alert(alert_email, "Stock Scanner Pro - Strong Buy Alert", body)
-                        if success:
-                            st.success(f"Alert sent to {alert_email}!")
-                        else:
-                            st.error(f"Failed to send: {msg}")
             else:
                 st.warning("No stocks found. Try wider filters.")
     elif st.session_state.results:
@@ -287,10 +268,27 @@ with tab2:
         else:
             st.warning(f"{add_manual} already in watchlist")
     if watchlist:
+        alert_email = st.text_input("Your email for alerts", key="watchlist_email")
+        st.divider()
         for ticker in watchlist:
-            c1,c2 = st.columns([4,1])
+            c1,c2,c3 = st.columns([3,2,1])
             c1.write(ticker)
-            if c2.button("Remove", key=f"rem_{ticker}"):
+            if c2.button("Send Alert", key=f"alert_{ticker}"):
+                if not alert_email:
+                    st.error("Enter your email above first")
+                else:
+                    with st.spinner(f"Fetching {ticker} data..."):
+                        d = get_stock_data(ticker)
+                    if d:
+                        body = f"Stock Alert: {ticker}\n\nPrice: ${round(d['price'],2)}\nChange: {d['chg']}%\nRating: {d['rating']}\nTarget: ${d['target']}\nSector: {d['sector']}"
+                        success, msg = send_email_alert(alert_email, f"Stock Scanner Pro Alert - {ticker}", body)
+                        if success:
+                            st.success(f"Alert sent for {ticker}!")
+                        else:
+                            st.error(f"Failed: {msg}")
+                    else:
+                        st.error(f"Could not fetch data for {ticker}")
+            if c3.button("Remove", key=f"rem_{ticker}"):
                 watchlist.remove(ticker)
                 save_watchlist(watchlist)
                 st.rerun()
