@@ -266,6 +266,12 @@ with tab1:
                         st.info(msg2.content[0].text)
 with tab2:
     st.title("My Watchlist")
+    if st.button("Debug: Check Secrets"):
+        try:
+            keys = list(st.secrets.keys())
+            st.write("Secret keys found:", keys)
+        except Exception as e:
+            st.write("Error reading secrets:", str(e))
     add_manual = st.text_input("Add ticker to watchlist", "").upper().strip()
     if st.button("Add") and add_manual:
         if add_manual not in watchlist:
