@@ -181,34 +181,50 @@ with tab1:
                 st.divider()
                 show_only_strong = st.checkbox("Show only Strong Buy", value=False, key="filter_run2")
                 display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
+                @st.dialog("Stock Details")
+                def show_stock_dialog(d):
+                    st.subheader(d["ticker"])
+                    c1,c2 = st.columns(2)
+                    c1.metric("Price", f"${round(d['price'],2)}")
+                    c2.metric("Change", f"{d['chg']}%")
+                    c3,c4 = st.columns(2)
+                    c3.metric("Rating", d["rating"])
+                    c4.metric("Vol Spike", f"{d['vol_spike']}x")
+                    c5,c6 = st.columns(2)
+                    c5.metric("Target", f"${d['target']}")
+                    c6.metric("Sector", d["sector"])
+                    c7,c8 = st.columns(2)
+                    c7.metric("52W High", f"${d['high']}")
+                    c8.metric("52W Low", f"${d['low']}")
+
+                    if show_ai:
+                        import anthropic
+                        try:
+                            akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
+                        except:
+                            akey = os.getenv("ANTHROPIC_KEY")
+                        if akey:
+                            with st.spinner("Getting AI analysis..."):
+                                client = anthropic.Anthropic(api_key=akey)
+                                prompt = "Analyze " + d["ticker"] + " stock in 3 sentences. Price $" + str(d["price"]) + ", change " + str(d["chg"]) + "%, rating " + d["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
+                                msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt}])
+                            st.info(msg.content[0].text)
+
+                    if st.button("+ Add to Watchlist", use_container_width=True):
+                        if d["ticker"] not in watchlist:
+                            watchlist.append(d["ticker"])
+                            save_watchlist(watchlist)
+                            st.success("Added " + d["ticker"] + " to watchlist!")
+                        else:
+                            st.info(d["ticker"] + " already in watchlist")
+
                 for r in display_results:
-                    label = f"{r["ticker"]} - ${round(r["price"],2)} - {r["chg"]}% - {r["rating"]}"
-                    auto_expand = auto_ai_strong and r["rating"]=="STRONG BUY"
-                    with st.expander(label, expanded=auto_expand):
-                        c1,c2 = st.columns(2)
-                        c1.metric("Price", f"${round(r["price"],2)}")
-                        c2.metric("Change", f"{r["chg"]}%")
-                        c3,c4 = st.columns(2)
-                        c3.metric("Rating", r["rating"])
-                        c4.metric("Vol Spike", f"{r["vol_spike"]}x")
-                        c5,c6 = st.columns(2)
-                        c5.metric("Target", f"${r["target"]}")
-                        c6.metric("Sector", r["sector"])
-                        c7,c8 = st.columns(2)
-                        c7.metric("52W High", f"${r["high"]}")
-                        c8.metric("52W Low", f"${r["low"]}")
-                        if show_ai or (auto_ai_strong and r["rating"]=="STRONG BUY"):
-                            import anthropic
-                            try:
-                                akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                            except:
-                                akey = os.getenv("ANTHROPIC_KEY")
-                            if akey:
-                                with st.spinner("Getting AI analysis..."):
-                                    client = anthropic.Anthropic(api_key=akey)
-                                    prompt = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
-                                    msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt}])
-                                st.info(msg.content[0].text)
+                    label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
+                    row_col1, row_col2 = st.columns([4,1])
+                    row_col1.write(label)
+                    if row_col2.button("Details", key="view_" + r["ticker"]):
+                        show_stock_dialog(r)
+
                 st.download_button("Download CSV", pd.DataFrame(results).to_csv(index=False).encode(), "results.csv")
 
             else:
@@ -239,20 +255,31 @@ with tab1:
         show_only_strong = st.checkbox("Show only Strong Buy", value=False)
         display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
         for r in display_results:
-            label = f"{r["ticker"]} - ${round(r["price"],2)} - {r["chg"]}% - {r["rating"]}"
-            auto_expand2 = auto_ai_strong and r["rating"]=="STRONG BUY"
-            with st.expander(label, expanded=auto_expand2):
-                c1,c2,c3,c4,c5 = st.columns(5)
-                c1.metric("Price", f"${round(r["price"],2)}")
-                c2.metric("Change", f"{r["chg"]}%")
-                c3.metric("Rating", r["rating"])
-                c4.metric("Target", f"${r["target"]}")
-                c5.metric("Vol Spike", f"{r["vol_spike"]}x")
-                c6,c7,c8 = st.columns(3)
-                c6.metric("52W High", f"${r["high"]}")
-                c7.metric("52W Low", f"${r["low"]}")
-                c8.metric("Sector", r["sector"])
-                if show_ai or (auto_ai_strong and r["rating"]=="STRONG BUY"):
+            label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
+            row_col1b, row_col2b = st.columns([4,1])
+            row_col1b.write(label)
+            if row_col2b.button("Details", key="view2_" + r["ticker"]):
+                st.session_state["viewing_ticker"] = r["ticker"]
+                st.session_state["viewing_data"] = r
+
+        if st.session_state.get("viewing_ticker"):
+            @st.dialog(st.session_state["viewing_ticker"])
+            def show_stock_dialog2():
+                d = st.session_state["viewing_data"]
+                c1,c2 = st.columns(2)
+                c1.metric("Price", f"${round(d['price'],2)}")
+                c2.metric("Change", f"{d['chg']}%")
+                c3,c4 = st.columns(2)
+                c3.metric("Rating", d["rating"])
+                c4.metric("Vol Spike", f"{d['vol_spike']}x")
+                c5,c6 = st.columns(2)
+                c5.metric("Target", f"${d['target']}")
+                c6.metric("Sector", d["sector"])
+                c7,c8 = st.columns(2)
+                c7.metric("52W High", f"${d['high']}")
+                c8.metric("52W Low", f"${d['low']}")
+
+                if show_ai:
                     import anthropic
                     try:
                         akey2 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
@@ -261,9 +288,20 @@ with tab1:
                     if akey2:
                         with st.spinner("Getting AI analysis..."):
                             client2 = anthropic.Anthropic(api_key=akey2)
-                            prompt2 = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
+                            prompt2 = "Analyze " + d["ticker"] + " stock in 3 sentences. Price $" + str(d["price"]) + ", change " + str(d["chg"]) + "%, rating " + d["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
                             msg2 = client2.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt2}])
                         st.info(msg2.content[0].text)
+
+                if st.button("+ Add to Watchlist", key="dlg2_add", use_container_width=True):
+                    if d["ticker"] not in watchlist:
+                        watchlist.append(d["ticker"])
+                        save_watchlist(watchlist)
+                        st.success("Added " + d["ticker"] + " to watchlist!")
+                    else:
+                        st.info(d["ticker"] + " already in watchlist")
+
+            show_stock_dialog2()
+
 with tab2:
     st.title("My Watchlist")
     add_manual = st.text_input("Add ticker to watchlist", "").upper().strip()
