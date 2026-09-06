@@ -90,6 +90,7 @@ def get_stock_data(ticker):
     except: pass
     return None
 st.set_page_config(page_title="Stock Scanner Pro", page_icon="📈", layout="wide")
+
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -218,12 +219,16 @@ with tab1:
                         else:
                             st.info(d["ticker"] + " already in watchlist")
 
-                for r in display_results:
-                    label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
-                    row_col1, row_col2 = st.columns([4,1])
-                    row_col1.write(label)
-                    if row_col2.button("Details", key="view_" + r["ticker"]):
-                        show_stock_dialog(r)
+                @st.fragment
+                def render_results_list(results_list):
+                    for r in results_list:
+                        label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
+                        row_col1, row_col2 = st.columns([4,1])
+                        row_col1.write(label)
+                        if row_col2.button("Details", key="view_" + r["ticker"]):
+                            show_stock_dialog(r)
+
+                render_results_list(display_results)
 
                 st.download_button("Download CSV", pd.DataFrame(results).to_csv(index=False).encode(), "results.csv")
 
