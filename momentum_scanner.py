@@ -75,7 +75,7 @@ with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
     col4, col5 = st.columns(2)
     min_price = col4.number_input("Min $", value=1)
     max_price = col5.number_input("Max $", value=1000)
-    use_live = st.checkbox("Discover live movers (FMP)", value=False)
+    use_live = st.checkbox("Discover live movers (FMP)", value=True)
     show_ai = st.checkbox("Enable AI Analysis", value=False)
     auto_ai_strong = st.checkbox("Auto-run AI on Strong Buy stocks", value=False)
     extra = st.text_input("Look up any ticker", "").upper().strip()
@@ -231,8 +231,6 @@ with tab1:
                             prompt2 = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
                             msg2 = client2.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt2}])
                         st.info(msg2.content[0].text)
-    else:
-        st.info("Tap Filters below to adjust settings, then click Run Scan")
 with tab2:
     st.title("My Watchlist")
     add_manual = st.text_input("Add ticker to watchlist", "").upper().strip()
