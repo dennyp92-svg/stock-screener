@@ -276,28 +276,59 @@ with tab2:
             st.warning(f"{add_manual} already in watchlist")
     if watchlist:
         alert_email = st.text_input("Your email for alerts", key="watchlist_email")
+        auto_threshold = st.number_input("Auto-alert if change % exceeds", value=5.0, step=1.0)
         st.divider()
         for ticker in watchlist:
-            c1,c2,c3 = st.columns([3,2,1])
-            c1.write(ticker)
-            if c2.button("Send Alert", key=f"alert_{ticker}"):
-                if not alert_email:
-                    st.error("Enter your email above first")
-                else:
-                    with st.spinner(f"Fetching {ticker} data..."):
-                        d = get_stock_data(ticker)
-                    if d:
-                        body = f"Stock Alert: {ticker}\n\nPrice: ${round(d['price'],2)}\nChange: {d['chg']}%\nRating: {d['rating']}\nTarget: ${d['target']}\nSector: {d['sector']}"
-                        success, msg = send_email_alert(alert_email, f"Stock Scanner Pro Alert - {ticker}", body)
-                        if success:
-                            st.success(f"Alert sent for {ticker}!")
+            d = get_stock_data(ticker)
+            if d:
+                price = round(d["price"], 2)
+                chg = d["chg"]
+                rating = d["rating"]
+                target = d["target"]
+                high = d["high"]
+                low = d["low"]
+                sector = d["sector"]
+                label = ticker + " - $" + str(price) + " - " + str(chg) + "% - " + rating
+                with st.expander(label):
+                    c1,c2,c3 = st.columns(3)
+                    c1.metric("Price", "$" + str(price))
+                    c2.metric("Change", str(chg) + "%")
+                    c3.metric("Rating", rating)
+                    c4,c5,c6 = st.columns(3)
+                    c4.metric("Target", "$" + str(target))
+                    c5.metric("52W High", "$" + str(high))
+                    c6.metric("52W Low", "$" + str(low))
+                    st.caption("Sector: " + sector)
+                    if abs(chg) >= auto_threshold and alert_email:
+                        alert_key = "auto_sent_" + ticker
+                        if alert_key not in st.session_state:
+                            body = "AUTOMATIC ALERT: " + ticker + " moved " + str(chg) + "%\n\nPrice: $" + str(price) + "\nRating: " + rating + "\nTarget: $" + str(target)
+                            subj = "BIG MOVE ALERT - " + ticker + " " + str(chg) + "%"
+                            success, msg = send_email_alert(alert_email, subj, body)
+                            if success:
+                                st.session_state[alert_key] = True
+                                st.success("Automatic alert sent for " + ticker)
+                            else:
+                                st.warning("Auto-alert failed: " + msg)
                         else:
-                            st.error(f"Failed: {msg}")
-                    else:
-                        st.error(f"Could not fetch data for {ticker}")
-            if c3.button("Remove", key=f"rem_{ticker}"):
-                watchlist.remove(ticker)
-                save_watchlist(watchlist)
-                st.rerun()
+                            st.info("Alert already sent for this move")
+                    c7,c8 = st.columns(2)
+                    if c7.button("Send Alert Now", key="alert_" + ticker):
+                        if not alert_email:
+                            st.error("Enter your email above first")
+                        else:
+                            body2 = "Stock Alert: " + ticker + "\n\nPrice: $" + str(price) + "\nChange: " + str(chg) + "%\nRating: " + rating + "\nTarget: $" + str(target)
+                            subj2 = "Stock Scanner Pro Alert - " + ticker
+                            success2, msg2 = send_email_alert(alert_email, subj2, body2)
+                            if success2:
+                                st.success("Alert sent for " + ticker)
+                            else:
+                                st.error("Failed: " + msg2)
+                    if c8.button("Remove", key="rem_" + ticker):
+                        watchlist.remove(ticker)
+                        save_watchlist(watchlist)
+                        st.rerun()
+            else:
+                st.warning("Could not fetch data for " + ticker)
     else:
         st.info("Watchlist is empty")
