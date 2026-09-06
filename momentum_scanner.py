@@ -2,6 +2,31 @@ import yfinance as yf
 import pandas as pd
 import streamlit as st
 import os, json
+import smtplib
+from email.mime.text import MIMEText
+
+def send_email_alert(to_email, subject, body):
+    try:
+        gmail_user = st.secrets.get("GMAIL_ADDRESS", os.getenv("GMAIL_ADDRESS"))
+        gmail_pass = st.secrets.get("GMAIL_APP_PASSWORD", os.getenv("GMAIL_APP_PASSWORD"))
+    except:
+        gmail_user = os.getenv("GMAIL_ADDRESS")
+        gmail_pass = os.getenv("GMAIL_APP_PASSWORD")
+    if not gmail_user or not gmail_pass:
+        return False, "Email not configured"
+    try:
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = gmail_user
+        msg["To"] = to_email
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(gmail_user, gmail_pass)
+        server.sendmail(gmail_user, to_email, msg.as_string())
+        server.quit()
+        return True, "Sent successfully"
+    except Exception as e:
+        return False, str(e)
 from dotenv import load_dotenv
 load_dotenv()
 try:
@@ -66,7 +91,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 watchlist = load_watchlist()
-tab1, tab2 = st.tabs(["📈 Scanner", "⭐ Watchlist"])
+st.title("Stock Scanner Pro")
 with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
     col1, col2, col3 = st.columns(3)
     min_change = col1.number_input("Min %", value=0)
@@ -84,8 +109,8 @@ with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
         st.session_state.results = None
         st.session_state.tickers_scanned = 0
     st.caption("Live market discovery enabled - real movers pulled fresh each scan")
+tab1, tab2 = st.tabs(["📈 Scanner", "⭐ Watchlist"])
 with tab1:
-    st.title("Stock Scanner Pro")
     if run:
         if extra:
             d = get_stock_data(extra)
@@ -178,6 +203,26 @@ with tab1:
                                     msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt}])
                                 st.info(msg.content[0].text)
                 st.download_button("Download CSV", pd.DataFrame(results).to_csv(index=False).encode(), "results.csv")
+
+                st.divider()
+                st.subheader("📧 Email These Results")
+                alert_email = st.text_input("Your email address", key="alert_email")
+                if st.button("Send Strong Buy Alert"):
+                    strong_buys = [r for r in results if r["rating"] == "STRONG BUY"]
+                    if not alert_email:
+                        st.error("Please enter an email address")
+                    elif not strong_buys:
+                        st.warning("No Strong Buy stocks to send right now")
+                    else:
+                        body_lines = ["Your Stock Scanner Pro Strong Buy Alert\n"]
+                        for r in strong_buys:
+                            body_lines.append(f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - Target ${r['target']}")
+                        body = "\n".join(body_lines)
+                        success, msg = send_email_alert(alert_email, "Stock Scanner Pro - Strong Buy Alert", body)
+                        if success:
+                            st.success(f"Alert sent to {alert_email}!")
+                        else:
+                            st.error(f"Failed to send: {msg}")
             else:
                 st.warning("No stocks found. Try wider filters.")
     elif st.session_state.results:
