@@ -75,7 +75,7 @@ with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
     col4, col5 = st.columns(2)
     min_price = col4.number_input("Min $", value=1)
     max_price = col5.number_input("Max $", value=1000)
-    use_live = st.checkbox("Discover live movers (FMP)", value=True)
+    use_live = True
     show_ai = st.checkbox("Enable AI Analysis", value=False)
     auto_ai_strong = st.checkbox("Auto-run AI on Strong Buy stocks", value=False)
     extra = st.text_input("Look up any ticker", "").upper().strip()
