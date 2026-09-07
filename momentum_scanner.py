@@ -136,21 +136,9 @@ tab1, tab2 = st.tabs(["📈 Scanner", "⭐ Watchlist"])
 with tab1:
     if run:
         if extra:
-            d = get_stock_data(extra)
-            if d:
-                st.success(f"Found {extra}")
-                c1,c2,c3,c4 = st.columns(4)
-                c1.metric("Price", f"${round(d["price"],2)}")
-                c2.metric("Change", f"{d["chg"]}%")
-                c3.metric("Rating", d["rating"])
-                c4.metric("Vol Spike", f"{d["vol_spike"]}x")
-                c5,c6,c7 = st.columns(3)
-                c5.metric("Target", f"${d["target"]}")
-                c6.metric("52W High", f"${d["high"]}")
-                c7.metric("52W Low", f"${d["low"]}")
-            else:
-                st.error(f"Could not find {extra}")
-        else:
+            st.session_state["manual_lookup"] = extra
+
+        if not st.session_state.get("manual_lookup"):
             tickers_to_scan = ALL_TICKERS
             if use_live:
                 live = get_fmp_movers()
@@ -227,9 +215,13 @@ with tab1:
                             st.info(msg.content[0].text)
 
                     if st.button("+ Add to Watchlist", use_container_width=True):
-                        if d["ticker"] not in watchlist:
-                            watchlist.append(d["ticker"])
-                            save_watchlist(watchlist)
+                        st.write("ADD BUTTON CLICKED FOR: " + d["ticker"])
+                        fresh_watchlist = load_watchlist()
+                        st.write("Current watchlist before: " + str(fresh_watchlist))
+                        if d["ticker"] not in fresh_watchlist:
+                            fresh_watchlist.append(d["ticker"])
+                            save_watchlist(fresh_watchlist)
+                            st.write("Watchlist after save: " + str(fresh_watchlist))
                             st.success("Added " + d["ticker"] + " to watchlist!")
                         else:
                             st.info(d["ticker"] + " already in watchlist")
@@ -322,6 +314,47 @@ with tab1:
 
             show_stock_dialog2()
 
+    if st.session_state.get("manual_lookup"):
+        d = get_stock_data(st.session_state["manual_lookup"])
+        if d:
+            st.divider()
+            st.success(f"Found {d['ticker']}")
+            c1,c2,c3,c4 = st.columns(4)
+            c1.metric("Price", f"${round(d['price'],2)}")
+            c2.metric("Change", f"{d['chg']}%")
+            c3.metric("Rating", d["rating"])
+            c4.metric("Vol Spike", f"{d['vol_spike']}x")
+            c5,c6,c7 = st.columns(3)
+            c5.metric("Target", f"${d['target']}")
+            c6.metric("52W High", f"${d['high']}")
+            c7.metric("52W Low", f"${d['low']}")
+            st.caption("Sector: " + d.get("sector","N/A") + " | RSI: " + str(d.get("rsi","N/A")))
+
+            extra_col1, extra_col2 = st.columns(2)
+            if extra_col1.button("+ Add to Watchlist", key="extra_add"):
+                fresh_wl = load_watchlist()
+                if d["ticker"] not in fresh_wl:
+                    fresh_wl.append(d["ticker"])
+                    save_watchlist(fresh_wl)
+                    st.success("Added " + d["ticker"] + " to watchlist!")
+                else:
+                    st.info(d["ticker"] + " already in watchlist")
+
+            if extra_col2.button("Get AI Analysis", key="extra_ai"):
+                try:
+                    akey4 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
+                except:
+                    akey4 = os.getenv("ANTHROPIC_KEY")
+                if akey4:
+                    import anthropic
+                    with st.spinner("Analyzing..."):
+                        client4 = anthropic.Anthropic(api_key=akey4)
+                        prompt4 = "Analyze " + d["ticker"] + " stock. Price $" + str(d["price"]) + ", change " + str(d["chg"]) + "%, RSI " + str(d.get("rsi","N/A")) + ", rating " + d["rating"] + ", target $" + str(d["target"]) + ". Give 2-3 sentence reasoning then end with SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. Research only, not financial advice."
+                        msg4 = client4.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt4}])
+                    st.info(msg4.content[0].text)
+        else:
+            st.error("Could not find " + st.session_state["manual_lookup"])
+
 with tab2:
     st.title("My Watchlist")
     add_manual = st.text_input("Add ticker to watchlist", "").upper().strip()
@@ -359,27 +392,32 @@ with tab2:
                     rsi_display = d.get("rsi", "N/A")
                     st.caption("Sector: " + sector + " | RSI: " + str(rsi_display))
 
-                    if st.button("Get AI Buy/Sell Signal", key="aisig_" + ticker):
+                    @st.dialog("AI Signal")
+                    def show_ai_signal_dialog(tkr, prc, chng, rsi_v, vspike, rtng, tgt, em):
+                        st.subheader(tkr)
                         try:
                             akey3 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
                         except:
                             akey3 = os.getenv("ANTHROPIC_KEY")
                         if akey3:
                             import anthropic
-                            with st.spinner("Analyzing " + ticker + "..."):
+                            with st.spinner("Analyzing " + tkr + "..."):
                                 client3 = anthropic.Anthropic(api_key=akey3)
-                                prompt3 = "You are a stock trading assistant. Analyze " + ticker + " and give a clear BUY, SELL, or HOLD recommendation. Data: Price $" + str(price) + ", change today " + str(chg) + "%, RSI " + str(rsi_display) + ", volume spike " + str(d.get("vol_spike","N/A")) + "x, analyst rating " + rating + ", target price $" + str(target) + ". Give a 2-3 sentence reasoning, then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is for research only, not financial advice."
+                                prompt3 = "You are a stock trading assistant. Analyze " + tkr + " and give a clear BUY, SELL, or HOLD recommendation. Data: Price $" + str(prc) + ", change today " + str(chng) + "%, RSI " + str(rsi_v) + ", volume spike " + str(vspike) + "x, analyst rating " + rtng + ", target price $" + str(tgt) + ". Give a 2-3 sentence reasoning, then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is for research only, not financial advice."
                                 msg3 = client3.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt3}])
                                 ai_text = msg3.content[0].text
                             st.info(ai_text)
 
                             if "SIGNAL: BUY" in ai_text or "SIGNAL: SELL" in ai_text:
-                                if alert_email:
+                                if em:
                                     signal_type = "BUY" if "SIGNAL: BUY" in ai_text else "SELL"
-                                    email_subj = "AI " + signal_type + " Signal - " + ticker
-                                    success3, msg_result3 = send_email_alert(alert_email, email_subj, ai_text)
+                                    email_subj = "AI " + signal_type + " Signal - " + tkr
+                                    success3, msg_result3 = send_email_alert(em, email_subj, ai_text)
                                     if success3:
                                         st.success("AI " + signal_type + " signal emailed to you!")
+
+                    if st.button("Get AI Buy/Sell Signal", key="aisig_" + ticker):
+                        show_ai_signal_dialog(ticker, price, chg, rsi_display, d.get("vol_spike","N/A"), rating, target, alert_email)
                     if abs(chg) >= auto_threshold and alert_email:
                         alert_key = "auto_sent_" + ticker
                         if alert_key not in st.session_state:
