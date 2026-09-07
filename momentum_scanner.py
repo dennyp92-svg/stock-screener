@@ -68,11 +68,25 @@ def save_watchlist(wl):
         with open(WATCHLIST_FILE, "w") as wf: json.dump(wl, wf)
     except: pass
 @st.cache_data(ttl=120)
+def calc_rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return None
+    deltas = prices.diff().dropna()
+    gains = deltas.where(deltas > 0, 0)
+    losses = -deltas.where(deltas < 0, 0)
+    avg_gain = gains.rolling(window=period).mean().iloc[-1]
+    avg_loss = losses.rolling(window=period).mean().iloc[-1]
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return round(rsi, 1)
+
 def get_stock_data(ticker):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        hist = stock.history(period="5d").dropna(subset=["Close"])
+        hist = stock.history(period="30d").dropna(subset=["Close"])
         if len(hist) >= 2:
             prev = float(hist["Close"].iloc[-2])
             curr = float(hist["Close"].iloc[-1])
@@ -80,13 +94,14 @@ def get_stock_data(ticker):
             vol = int(hist["Volume"].iloc[-1])
             avg_vol = int(hist["Volume"].mean())
             vol_spike = round(vol/avg_vol,2) if avg_vol>0 else 0
+            rsi_val = calc_rsi(hist["Close"])
             rec = info.get("recommendationKey","none")
             if rec == "strong_buy": rating = "STRONG BUY"
             elif rec == "buy": rating = "BUY"
             elif rec == "hold": rating = "HOLD"
             elif rec == "sell": rating = "SELL"
             else: rating = "N/A"
-            return {"ticker":ticker,"price":curr,"chg":chg,"rating":rating,"target":info.get("targetMeanPrice","N/A"),"vol_spike":vol_spike,"high":info.get("fiftyTwoWeekHigh",0),"low":info.get("fiftyTwoWeekLow",0),"sector":info.get("sector","N/A")}
+            return {"ticker":ticker,"price":curr,"chg":chg,"rating":rating,"target":info.get("targetMeanPrice","N/A"),"vol_spike":vol_spike,"high":info.get("fiftyTwoWeekHigh",0),"low":info.get("fiftyTwoWeekLow",0),"sector":info.get("sector","N/A"),"rsi":rsi_val}
     except: pass
     return None
 st.set_page_config(page_title="Stock Scanner Pro", page_icon="📈", layout="wide")
@@ -341,7 +356,30 @@ with tab2:
                     c4.metric("Target", "$" + str(target))
                     c5.metric("52W High", "$" + str(high))
                     c6.metric("52W Low", "$" + str(low))
-                    st.caption("Sector: " + sector)
+                    rsi_display = d.get("rsi", "N/A")
+                    st.caption("Sector: " + sector + " | RSI: " + str(rsi_display))
+
+                    if st.button("Get AI Buy/Sell Signal", key="aisig_" + ticker):
+                        try:
+                            akey3 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
+                        except:
+                            akey3 = os.getenv("ANTHROPIC_KEY")
+                        if akey3:
+                            import anthropic
+                            with st.spinner("Analyzing " + ticker + "..."):
+                                client3 = anthropic.Anthropic(api_key=akey3)
+                                prompt3 = "You are a stock trading assistant. Analyze " + ticker + " and give a clear BUY, SELL, or HOLD recommendation. Data: Price $" + str(price) + ", change today " + str(chg) + "%, RSI " + str(rsi_display) + ", volume spike " + str(d.get("vol_spike","N/A")) + "x, analyst rating " + rating + ", target price $" + str(target) + ". Give a 2-3 sentence reasoning, then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is for research only, not financial advice."
+                                msg3 = client3.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt3}])
+                                ai_text = msg3.content[0].text
+                            st.info(ai_text)
+
+                            if "SIGNAL: BUY" in ai_text or "SIGNAL: SELL" in ai_text:
+                                if alert_email:
+                                    signal_type = "BUY" if "SIGNAL: BUY" in ai_text else "SELL"
+                                    email_subj = "AI " + signal_type + " Signal - " + ticker
+                                    success3, msg_result3 = send_email_alert(alert_email, email_subj, ai_text)
+                                    if success3:
+                                        st.success("AI " + signal_type + " signal emailed to you!")
                     if abs(chg) >= auto_threshold and alert_email:
                         alert_key = "auto_sent_" + ticker
                         if alert_key not in st.session_state:
