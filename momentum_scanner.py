@@ -101,7 +101,19 @@ def get_stock_data(ticker):
             elif rec == "hold": rating = "HOLD"
             elif rec == "sell": rating = "SELL"
             else: rating = "N/A"
-            return {"ticker":ticker,"price":curr,"chg":chg,"rating":rating,"target":info.get("targetMeanPrice","N/A"),"vol_spike":vol_spike,"high":info.get("fiftyTwoWeekHigh",0),"low":info.get("fiftyTwoWeekLow",0),"sector":info.get("sector","N/A"),"rsi":rsi_val}
+
+            week52_high = info.get("fiftyTwoWeekHigh", 0)
+            pct_from_high = round(((week52_high - curr) / week52_high) * 100, 1) if week52_high > 0 else None
+
+            today_high = float(hist["High"].iloc[-1])
+            today_low = float(hist["Low"].iloc[-1])
+            candle_range = today_high - today_low
+            if candle_range > 0:
+                candle_quality = round(((curr - today_low) / candle_range) * 100, 1)
+            else:
+                candle_quality = 100
+
+            return {"ticker":ticker,"price":curr,"chg":chg,"rating":rating,"target":info.get("targetMeanPrice","N/A"),"vol_spike":vol_spike,"high":week52_high,"low":info.get("fiftyTwoWeekLow",0),"sector":info.get("sector","N/A"),"rsi":rsi_val,"pct_from_high":pct_from_high,"candle_quality":candle_quality}
     except: pass
     return None
 st.set_page_config(page_title="Stock Scanner Pro", page_icon="📈", layout="wide")
@@ -391,10 +403,12 @@ with tab2:
                     c5.metric("52W High", "$" + str(high))
                     c6.metric("52W Low", "$" + str(low))
                     rsi_display = d.get("rsi", "N/A")
-                    st.caption("Sector: " + sector + " | RSI: " + str(rsi_display))
+                    pct_high_display = d.get("pct_from_high", "N/A")
+                    candle_q_display = d.get("candle_quality", "N/A")
+                    st.caption("Sector: " + sector + " | RSI: " + str(rsi_display) + " | " + str(pct_high_display) + "% below 52W high | Candle close: " + str(candle_q_display) + "%")
 
                     @st.dialog("AI Signal")
-                    def show_ai_signal_dialog(tkr, prc, chng, rsi_v, vspike, rtng, tgt, em):
+                    def show_ai_signal_dialog(tkr, prc, chng, rsi_v, vspike, rtng, tgt, em, pct_high=None, candle_q=None):
                         st.subheader(tkr)
                         try:
                             akey3 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
@@ -404,7 +418,12 @@ with tab2:
                             import anthropic
                             with st.spinner("Analyzing " + tkr + "..."):
                                 client3 = anthropic.Anthropic(api_key=akey3)
-                                prompt3 = "You are a stock trading assistant. Analyze " + tkr + " and give a clear BUY, SELL, or HOLD recommendation. Data: Price $" + str(prc) + ", change today " + str(chng) + "%, RSI " + str(rsi_v) + ", volume spike " + str(vspike) + "x, analyst rating " + rtng + ", target price $" + str(tgt) + ". Give a 2-3 sentence reasoning, then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is for research only, not financial advice."
+                                extra_context = ""
+                                if pct_high is not None:
+                                    extra_context += " Stock is " + str(pct_high) + "% below its 52-week high (0% means at the high)."
+                                if candle_q is not None:
+                                    extra_context += " Today's candle closed at " + str(candle_q) + "% of its daily range (100% = closed at the high, strong; 0% = closed at the low, weak, long upper wick)."
+                                prompt3 = "You are a stock trading assistant. Analyze " + tkr + " and give a clear BUY, SELL, or HOLD recommendation. Data: Price $" + str(prc) + ", change today " + str(chng) + "%, RSI " + str(rsi_v) + ", volume spike " + str(vspike) + "x, analyst rating " + rtng + ", target price $" + str(tgt) + "."+ extra_context + ". Give a 2-3 sentence reasoning, then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is for research only, not financial advice."
                                 msg3 = client3.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt3}])
                                 ai_text = msg3.content[0].text
                             st.info(ai_text)
@@ -418,7 +437,7 @@ with tab2:
                                         st.success("AI " + signal_type + " signal emailed to you!")
 
                     if st.button("Get AI Buy/Sell Signal", key="aisig_" + ticker):
-                        show_ai_signal_dialog(ticker, price, chg, rsi_display, d.get("vol_spike","N/A"), rating, target, alert_email)
+                        show_ai_signal_dialog(ticker, price, chg, rsi_display, d.get("vol_spike","N/A"), rating, target, alert_email, d.get("pct_from_high"), d.get("candle_quality"))
                     if abs(chg) >= auto_threshold and alert_email:
                         alert_key = "auto_sent_" + ticker
                         if alert_key not in st.session_state:
