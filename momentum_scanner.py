@@ -119,7 +119,8 @@ with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
     col1, col2, col3 = st.columns(3)
     min_change = col1.number_input("Min %", value=0)
     max_change = col2.number_input("Max %", value=100)
-    min_vol = col3.number_input("Vol Spike", value=0.0, step=0.5)
+    min_vol_pct = col3.number_input("Vol Spike %", value=0, step=25, help="e.g. 200 means volume is 2x normal")
+    min_vol = min_vol_pct / 100
     col4, col5 = st.columns(2)
     min_price = col4.number_input("Min $", value=1)
     max_price = col5.number_input("Max $", value=1000)
