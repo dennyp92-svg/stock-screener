@@ -202,7 +202,7 @@ with tab1:
                 def render_results_list(results_list):
                     for r in results_list:
                         label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
-                        with st.expander(label):
+                        with st.expander(label, expanded=(auto_ai_strong and r["rating"]=="STRONG BUY")):
                             c1,c2,c3 = st.columns(3)
                             c1.metric("Price", f"${round(r['price'],2)}")
                             c2.metric("Change", f"{r['chg']}%")
@@ -216,7 +216,7 @@ with tab1:
                             rsi_r = r.get("rsi", "N/A")
                             st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r) + " | " + str(pct_high_r) + "% below 52W high | Candle close: " + str(candle_r) + "%")
 
-                            if show_ai:
+                            if show_ai or (auto_ai_strong and r["rating"]=="STRONG BUY"):
                                 import anthropic
                                 try:
                                     akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
@@ -272,7 +272,7 @@ with tab1:
         display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
         for r in display_results:
             label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
-            with st.expander(label):
+            with st.expander(label, expanded=(auto_ai_strong and r["rating"]=="STRONG BUY")):
                 c1,c2,c3 = st.columns(3)
                 c1.metric("Price", f"${round(r['price'],2)}")
                 c2.metric("Change", f"{r['chg']}%")
@@ -286,7 +286,7 @@ with tab1:
                 rsi_r2 = r.get("rsi", "N/A")
                 st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r2) + " | " + str(pct_high_r2) + "% below 52W high | Candle close: " + str(candle_r2) + "%")
 
-                if show_ai:
+                if show_ai or (auto_ai_strong and r["rating"]=="STRONG BUY"):
                     import anthropic
                     try:
                         akey2 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
