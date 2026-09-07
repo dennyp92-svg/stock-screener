@@ -225,8 +225,8 @@ with tab1:
                                 if akey:
                                     with st.spinner("Getting AI analysis..."):
                                         client = anthropic.Anthropic(api_key=akey)
-                                        prompt = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
-                                        msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt}])
+                                        prompt = "Analyze " + r["ticker"] + " for a short-term momentum trade. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ", RSI " + str(r.get("rsi","N/A")) + ", volume spike " + str(r.get("vol_spike","N/A")) + "x, " + str(r.get("pct_from_high","N/A")) + "% below 52-week high, candle closed at " + str(r.get("candle_quality","N/A")) + "% of its range. Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price for a short-term trade, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. This is an algorithmic estimate for research only, not financial advice."
+                                        msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=250, messages=[{"role":"user","content":prompt}])
                                     st.info(msg.content[0].text)
 
                             if st.button("+ Add to Watchlist", key="scanadd_" + r["ticker"], use_container_width=True):
@@ -295,8 +295,8 @@ with tab1:
                     if akey2:
                         with st.spinner("Getting AI analysis..."):
                             client2 = anthropic.Anthropic(api_key=akey2)
-                            prompt2 = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
-                            msg2 = client2.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt2}])
+                            prompt2 = "Analyze " + r["ticker"] + " for a short-term momentum trade. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ", RSI " + str(r.get("rsi","N/A")) + ", volume spike " + str(r.get("vol_spike","N/A")) + "x, " + str(r.get("pct_from_high","N/A")) + "% below 52-week high, candle closed at " + str(r.get("candle_quality","N/A")) + "% of its range. Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price for a short-term trade, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. This is an algorithmic estimate for research only, not financial advice."
+                            msg2 = client2.messages.create(model="claude-sonnet-4-6", max_tokens=250, messages=[{"role":"user","content":prompt2}])
                         st.info(msg2.content[0].text)
 
                 if st.button("+ Add to Watchlist", key="scanadd2_" + r["ticker"], use_container_width=True):
@@ -405,7 +405,7 @@ with tab2:
                                     extra_context += " Stock is " + str(pct_high) + "% below its 52-week high (0% means at the high)."
                                 if candle_q is not None:
                                     extra_context += " Today's candle closed at " + str(candle_q) + "% of its daily range (100% = closed at the high, strong; 0% = closed at the low, weak, long upper wick)."
-                                prompt3 = "You are a stock trading assistant. Analyze " + tkr + " and give a clear BUY, SELL, or HOLD recommendation. Data: Price $" + str(prc) + ", change today " + str(chng) + "%, RSI " + str(rsi_v) + ", volume spike " + str(vspike) + "x, analyst rating " + rtng + ", target price $" + str(tgt) + "."+ extra_context + ". Give a 2-3 sentence reasoning, then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is for research only, not financial advice."
+                                prompt3 = "You are a stock trading assistant. Analyze " + tkr + " for a short-term momentum trade. Data: Price $" + str(prc) + ", change today " + str(chng) + "%, RSI " + str(rsi_v) + ", volume spike " + str(vspike) + "x, analyst rating " + rtng + ", target price $" + str(tgt) + "." + extra_context + " Give a 2-3 sentence reasoning, then suggest a specific BUY entry price and a SELL target price, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. Then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is an algorithmic estimate for research only, not financial advice."
                                 msg3 = client3.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt3}])
                                 ai_text = msg3.content[0].text
                             st.info(ai_text)
