@@ -198,55 +198,46 @@ with tab1:
                 st.divider()
                 show_only_strong = st.checkbox("Show only Strong Buy", value=False, key="filter_run2")
                 display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
-                @st.dialog("Stock Details")
-                def show_stock_dialog(d):
-                    st.subheader(d["ticker"])
-                    c1,c2 = st.columns(2)
-                    c1.metric("Price", f"${round(d['price'],2)}")
-                    c2.metric("Change", f"{d['chg']}%")
-                    c3,c4 = st.columns(2)
-                    c3.metric("Rating", d["rating"])
-                    c4.metric("Vol Spike", f"{d['vol_spike']}x")
-                    c5,c6 = st.columns(2)
-                    c5.metric("Target", f"${d['target']}")
-                    c6.metric("Sector", d["sector"])
-                    c7,c8 = st.columns(2)
-                    c7.metric("52W High", f"${d['high']}")
-                    c8.metric("52W Low", f"${d['low']}")
-
-                    if show_ai:
-                        import anthropic
-                        try:
-                            akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                        except:
-                            akey = os.getenv("ANTHROPIC_KEY")
-                        if akey:
-                            with st.spinner("Getting AI analysis..."):
-                                client = anthropic.Anthropic(api_key=akey)
-                                prompt = "Analyze " + d["ticker"] + " stock in 3 sentences. Price $" + str(d["price"]) + ", change " + str(d["chg"]) + "%, rating " + d["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
-                                msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt}])
-                            st.info(msg.content[0].text)
-
-                    if st.button("+ Add to Watchlist", use_container_width=True):
-                        st.write("ADD BUTTON CLICKED FOR: " + d["ticker"])
-                        fresh_watchlist = load_watchlist()
-                        st.write("Current watchlist before: " + str(fresh_watchlist))
-                        if d["ticker"] not in fresh_watchlist:
-                            fresh_watchlist.append(d["ticker"])
-                            save_watchlist(fresh_watchlist)
-                            st.write("Watchlist after save: " + str(fresh_watchlist))
-                            st.success("Added " + d["ticker"] + " to watchlist!")
-                        else:
-                            st.info(d["ticker"] + " already in watchlist")
-
                 @st.fragment
                 def render_results_list(results_list):
                     for r in results_list:
                         label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
-                        row_col1, row_col2 = st.columns([4,1])
-                        row_col1.write(label)
-                        if row_col2.button("Details", key="view_" + r["ticker"]):
-                            show_stock_dialog(r)
+                        with st.expander(label):
+                            c1,c2,c3 = st.columns(3)
+                            c1.metric("Price", f"${round(r['price'],2)}")
+                            c2.metric("Change", f"{r['chg']}%")
+                            c3.metric("Rating", r["rating"])
+                            c4,c5,c6 = st.columns(3)
+                            c4.metric("Target", f"${r['target']}")
+                            c5.metric("52W High", f"${r['high']}")
+                            c6.metric("52W Low", f"${r['low']}")
+                            pct_high_r = r.get("pct_from_high", "N/A")
+                            candle_r = r.get("candle_quality", "N/A")
+                            rsi_r = r.get("rsi", "N/A")
+                            st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r) + " | " + str(pct_high_r) + "% below 52W high | Candle close: " + str(candle_r) + "%")
+
+                            if show_ai:
+                                import anthropic
+                                try:
+                                    akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
+                                except:
+                                    akey = os.getenv("ANTHROPIC_KEY")
+                                if akey:
+                                    with st.spinner("Getting AI analysis..."):
+                                        client = anthropic.Anthropic(api_key=akey)
+                                        prompt = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
+                                        msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt}])
+                                    st.info(msg.content[0].text)
+
+                            if st.button("+ Add to Watchlist", key="scanadd_" + r["ticker"], use_container_width=True):
+                                fresh_watchlist = load_watchlist()
+                                if r["ticker"] not in fresh_watchlist:
+                                    fresh_watchlist.append(r["ticker"])
+                                    save_watchlist(fresh_watchlist)
+                                    st.session_state["watchlist_data"] = fresh_watchlist
+                                    st.success("Added " + r["ticker"] + " to watchlist!")
+                                else:
+                                    st.info(r["ticker"] + " already in watchlist")
 
                 render_results_list(display_results)
 
@@ -281,28 +272,19 @@ with tab1:
         display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
         for r in display_results:
             label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
-            row_col1b, row_col2b = st.columns([4,1])
-            row_col1b.write(label)
-            if row_col2b.button("Details", key="view2_" + r["ticker"]):
-                st.session_state["viewing_ticker"] = r["ticker"]
-                st.session_state["viewing_data"] = r
-
-        if st.session_state.get("viewing_ticker"):
-            @st.dialog(st.session_state["viewing_ticker"])
-            def show_stock_dialog2():
-                d = st.session_state["viewing_data"]
-                c1,c2 = st.columns(2)
-                c1.metric("Price", f"${round(d['price'],2)}")
-                c2.metric("Change", f"{d['chg']}%")
-                c3,c4 = st.columns(2)
-                c3.metric("Rating", d["rating"])
-                c4.metric("Vol Spike", f"{d['vol_spike']}x")
-                c5,c6 = st.columns(2)
-                c5.metric("Target", f"${d['target']}")
-                c6.metric("Sector", d["sector"])
-                c7,c8 = st.columns(2)
-                c7.metric("52W High", f"${d['high']}")
-                c8.metric("52W Low", f"${d['low']}")
+            with st.expander(label):
+                c1,c2,c3 = st.columns(3)
+                c1.metric("Price", f"${round(r['price'],2)}")
+                c2.metric("Change", f"{r['chg']}%")
+                c3.metric("Rating", r["rating"])
+                c4,c5,c6 = st.columns(3)
+                c4.metric("Target", f"${r['target']}")
+                c5.metric("52W High", f"${r['high']}")
+                c6.metric("52W Low", f"${r['low']}")
+                pct_high_r2 = r.get("pct_from_high", "N/A")
+                candle_r2 = r.get("candle_quality", "N/A")
+                rsi_r2 = r.get("rsi", "N/A")
+                st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r2) + " | " + str(pct_high_r2) + "% below 52W high | Candle close: " + str(candle_r2) + "%")
 
                 if show_ai:
                     import anthropic
@@ -313,19 +295,19 @@ with tab1:
                     if akey2:
                         with st.spinner("Getting AI analysis..."):
                             client2 = anthropic.Anthropic(api_key=akey2)
-                            prompt2 = "Analyze " + d["ticker"] + " stock in 3 sentences. Price $" + str(d["price"]) + ", change " + str(d["chg"]) + "%, rating " + d["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
+                            prompt2 = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
                             msg2 = client2.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt2}])
                         st.info(msg2.content[0].text)
 
-                if st.button("+ Add to Watchlist", key="dlg2_add", use_container_width=True):
-                    if d["ticker"] not in watchlist:
-                        watchlist.append(d["ticker"])
-                        save_watchlist(watchlist)
-                        st.success("Added " + d["ticker"] + " to watchlist!")
+                if st.button("+ Add to Watchlist", key="scanadd2_" + r["ticker"], use_container_width=True):
+                    fresh_watchlist2 = load_watchlist()
+                    if r["ticker"] not in fresh_watchlist2:
+                        fresh_watchlist2.append(r["ticker"])
+                        save_watchlist(fresh_watchlist2)
+                        st.session_state["watchlist_data"] = fresh_watchlist2
+                        st.success("Added " + r["ticker"] + " to watchlist!")
                     else:
-                        st.info(d["ticker"] + " already in watchlist")
-
-            show_stock_dialog2()
+                        st.info(r["ticker"] + " already in watchlist")
 
     if st.session_state.get("manual_lookup"):
         d = get_stock_data(st.session_state["manual_lookup"])
