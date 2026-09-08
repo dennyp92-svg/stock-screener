@@ -207,6 +207,7 @@ with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
     use_live = True
     show_ai = st.checkbox("Enable AI Analysis", value=False)
     auto_ai_strong = st.checkbox("Auto-run AI on Strong Buy stocks", value=False)
+
     extra = st.text_input("Look up any ticker", "").upper().strip()
     run = st.button("Run Scan", use_container_width=True)
     if "results" not in st.session_state:
