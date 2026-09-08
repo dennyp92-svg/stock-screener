@@ -47,7 +47,16 @@ def analyze_one_stock(r):
         news_context = ""
         if news_headlines:
             news_context = " Recent news headlines: " + " | ".join(news_headlines)
-        prompt = "Analyze " + r["ticker"] + " for a short-term momentum trade. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ", RSI " + str(r.get("rsi","N/A")) + ", volume spike " + str(r.get("vol_spike","N/A")) + "x, " + str(r.get("pct_from_high","N/A")) + "% below 52-week high, candle closed at " + str(r.get("candle_quality","N/A")) + "% of its range." + news_context + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price for a short-term trade, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. This is an algorithmic estimate for research only, not financial advice."
+        float_shares = get_float_data(r["ticker"])
+        float_context = ""
+        if float_shares:
+            float_millions = round(float_shares / 1000000, 1)
+            float_context = " Float: " + str(float_millions) + "M shares"
+            if float_millions < 20:
+                float_context += " (very low float - high volatility potential)"
+            elif float_millions < 50:
+                float_context += " (low float - elevated volatility potential)"
+        prompt = "Analyze " + r["ticker"] + " for a short-term momentum trade. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ", RSI " + str(r.get("rsi","N/A")) + ", volume spike " + str(r.get("vol_spike","N/A")) + "x, " + str(r.get("pct_from_high","N/A")) + "% below 52-week high, candle closed at " + str(r.get("candle_quality","N/A")) + "% of its range." + float_context + news_context + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price for a short-term trade, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. This is an algorithmic estimate for research only, not financial advice."
         client = anthropic.Anthropic(api_key=akey)
         msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=350, messages=[{"role":"user","content":prompt}])
         result_text = msg.content[0].text
@@ -67,6 +76,17 @@ def get_ai_batch(stocks_list):
             ticker, text = f.result()
             results_dict[ticker] = text
     return results_dict
+
+def get_float_data(ticker):
+    try:
+        url = f"https://financialmodelingprep.com/stable/shares-float?symbol={ticker}&apikey={FMP_KEY}"
+        import requests
+        r = requests.get(url, timeout=8).json()
+        if r and len(r) > 0:
+            return r[0].get("floatShares", None)
+    except:
+        pass
+    return None
 
 def get_stock_news(ticker):
     try:
