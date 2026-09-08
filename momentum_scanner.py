@@ -38,12 +38,15 @@ def get_fmp_movers():
     try:
         url1 = f"https://financialmodelingprep.com/stable/biggest-gainers?apikey={FMP_KEY}"
         url2 = f"https://financialmodelingprep.com/stable/most-actives?apikey={FMP_KEY}"
+        url3 = f"https://financialmodelingprep.com/stable/biggest-losers?apikey={FMP_KEY}"
         import requests
         r1 = requests.get(url1, timeout=10).json()
         r2 = requests.get(url2, timeout=10).json()
+        r3 = requests.get(url3, timeout=10).json()
         t1 = [s["symbol"] for s in r1 if "symbol" in s]
         t2 = [s["symbol"] for s in r2 if "symbol" in s]
-        combined = list(dict.fromkeys(t1 + t2))
+        t3 = [s["symbol"] for s in r3 if "symbol" in s]
+        combined = list(dict.fromkeys(t1 + t2 + t3))
         return combined
     except:
         return []
