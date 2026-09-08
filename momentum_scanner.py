@@ -384,7 +384,16 @@ with tab1:
                             news_context2 = ""
                             if news_headlines2:
                                 news_context2 = " Recent news headlines: " + " | ".join(news_headlines2)
-                            prompt2 = "Analyze " + r["ticker"] + " for a short-term momentum trade. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ", RSI " + str(r.get("rsi","N/A")) + ", volume spike " + str(r.get("vol_spike","N/A")) + "x, " + str(r.get("pct_from_high","N/A")) + "% below 52-week high, candle closed at " + str(r.get("candle_quality","N/A")) + "% of its range." + news_context2 + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price for a short-term trade, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. This is an algorithmic estimate for research only, not financial advice."
+                            float_shares2 = get_float_data(r["ticker"])
+                            float_context2 = ""
+                            if float_shares2:
+                                float_millions2 = round(float_shares2 / 1000000, 1)
+                                float_context2 = " Float: " + str(float_millions2) + "M shares"
+                                if float_millions2 < 20:
+                                    float_context2 += " (very low float - high volatility potential)"
+                                elif float_millions2 < 50:
+                                    float_context2 += " (low float - elevated volatility potential)"
+                            prompt2 = "Analyze " + r["ticker"] + " for a short-term momentum trade. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ", RSI " + str(r.get("rsi","N/A")) + ", volume spike " + str(r.get("vol_spike","N/A")) + "x, " + str(r.get("pct_from_high","N/A")) + "% below 52-week high, candle closed at " + str(r.get("candle_quality","N/A")) + "% of its range." + float_context2 + news_context2 + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price for a short-term trade, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. This is an algorithmic estimate for research only, not financial advice."
                             msg2 = client2.messages.create(model="claude-sonnet-4-6", max_tokens=250, messages=[{"role":"user","content":prompt2}])
                         result2 = msg2.content[0].text
                         if "not financial advice" not in result2.lower():
@@ -440,7 +449,16 @@ with tab1:
                         news_context4 = ""
                         if news_headlines4:
                             news_context4 = " Recent news headlines: " + " | ".join(news_headlines4)
-                        prompt4 = "Analyze " + d["ticker"] + " for a short-term momentum trade. Price $" + str(d["price"]) + ", change " + str(d["chg"]) + "%, RSI " + str(d.get("rsi","N/A")) + ", rating " + d["rating"] + ", target $" + str(d["target"]) + "." + news_context4 + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. Then end with SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is an algorithmic estimate for research only, not financial advice."
+                        float_shares4 = get_float_data(d["ticker"])
+                        float_context4 = ""
+                        if float_shares4:
+                            float_millions4 = round(float_shares4 / 1000000, 1)
+                            float_context4 = " Float: " + str(float_millions4) + "M shares"
+                            if float_millions4 < 20:
+                                float_context4 += " (very low float - high volatility potential)"
+                            elif float_millions4 < 50:
+                                float_context4 += " (low float - elevated volatility potential)"
+                        prompt4 = "Analyze " + d["ticker"] + " for a short-term momentum trade. Price $" + str(d["price"]) + ", change " + str(d["chg"]) + "%, RSI " + str(d.get("rsi","N/A")) + ", rating " + d["rating"] + ", target $" + str(d["target"]) + "." + float_context4 + news_context4 + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. Then end with SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is an algorithmic estimate for research only, not financial advice."
                         msg4 = client4.messages.create(model="claude-sonnet-4-6", max_tokens=300, messages=[{"role":"user","content":prompt4}])
                     result4 = msg4.content[0].text
                     if "not financial advice" not in result4.lower():
@@ -508,8 +526,17 @@ with tab2:
                                 news_context3 = ""
                                 if news_headlines3:
                                     news_context3 = " Recent news headlines: " + " | ".join(news_headlines3)
-                                prompt3 = "You are a stock trading assistant. Analyze " + tkr + " for a short-term momentum trade. Data: Price $" + str(prc) + ", change today " + str(chng) + "%, RSI " + str(rsi_v) + ", volume spike " + str(vspike) + "x, analyst rating " + rtng + ", target price $" + str(tgt) + "." + extra_context + news_context3 + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give a 2-3 sentence reasoning, then suggest a specific BUY entry price and a SELL target price, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. Then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is an algorithmic estimate for research only, not financial advice."
-                                msg3 = client3.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt3}])
+                                float_shares3 = get_float_data(tkr)
+                                float_context3 = ""
+                                if float_shares3:
+                                    float_millions3 = round(float_shares3 / 1000000, 1)
+                                    float_context3 = " Float: " + str(float_millions3) + "M shares"
+                                    if float_millions3 < 20:
+                                        float_context3 += " (very low float - high volatility potential)"
+                                    elif float_millions3 < 50:
+                                        float_context3 += " (low float - elevated volatility potential)"
+                                prompt3 = "You are a stock trading assistant. Analyze " + tkr + " for a short-term momentum trade. Data: Price $" + str(prc) + ", change today " + str(chng) + "%, RSI " + str(rsi_v) + ", volume spike " + str(vspike) + "x, analyst rating " + rtng + ", target price $" + str(tgt) + "." + extra_context + float_context3 + news_context3 + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give a 2-3 sentence reasoning, then suggest a specific BUY entry price and a SELL target price, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. Then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is an algorithmic estimate for research only, not financial advice."
+                                msg3 = client3.messages.create(model="claude-sonnet-4-6", max_tokens=350, messages=[{"role":"user","content":prompt3}])
                                 ai_text = msg3.content[0].text
                                 if "not financial advice" not in ai_text.lower():
                                     ai_text += "\n\n*This is an algorithmic estimate for research purposes only. Not financial advice.*"
