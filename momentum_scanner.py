@@ -34,6 +34,16 @@ try:
 except:
     FMP_KEY = os.getenv("FMP_KEY")
 
+def get_stock_news(ticker):
+    try:
+        url = f"https://financialmodelingprep.com/stable/news/stock?symbols={ticker}&limit=3&apikey={FMP_KEY}"
+        import requests
+        r = requests.get(url, timeout=8).json()
+        headlines = [item["title"] for item in r if "title" in item]
+        return headlines
+    except:
+        return []
+
 def get_fmp_movers():
     try:
         url1 = f"https://financialmodelingprep.com/stable/biggest-gainers?apikey={FMP_KEY}"
@@ -228,7 +238,11 @@ with tab1:
                                 if akey:
                                     with st.spinner("Getting AI analysis..."):
                                         client = anthropic.Anthropic(api_key=akey)
-                                        prompt = "Analyze " + r["ticker"] + " for a short-term momentum trade. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ", RSI " + str(r.get("rsi","N/A")) + ", volume spike " + str(r.get("vol_spike","N/A")) + "x, " + str(r.get("pct_from_high","N/A")) + "% below 52-week high, candle closed at " + str(r.get("candle_quality","N/A")) + "% of its range. Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price for a short-term trade, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. This is an algorithmic estimate for research only, not financial advice."
+                                        news_headlines = get_stock_news(r["ticker"])
+                                        news_context = ""
+                                        if news_headlines:
+                                            news_context = " Recent news headlines: " + " | ".join(news_headlines)
+                                        prompt = "Analyze " + r["ticker"] + " for a short-term momentum trade. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ", RSI " + str(r.get("rsi","N/A")) + ", volume spike " + str(r.get("vol_spike","N/A")) + "x, " + str(r.get("pct_from_high","N/A")) + "% below 52-week high, candle closed at " + str(r.get("candle_quality","N/A")) + "% of its range." + news_context + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price for a short-term trade, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. This is an algorithmic estimate for research only, not financial advice."
                                         msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=250, messages=[{"role":"user","content":prompt}])
                                     st.info(msg.content[0].text)
 
@@ -298,7 +312,11 @@ with tab1:
                     if akey2:
                         with st.spinner("Getting AI analysis..."):
                             client2 = anthropic.Anthropic(api_key=akey2)
-                            prompt2 = "Analyze " + r["ticker"] + " for a short-term momentum trade. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ", RSI " + str(r.get("rsi","N/A")) + ", volume spike " + str(r.get("vol_spike","N/A")) + "x, " + str(r.get("pct_from_high","N/A")) + "% below 52-week high, candle closed at " + str(r.get("candle_quality","N/A")) + "% of its range. Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price for a short-term trade, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. This is an algorithmic estimate for research only, not financial advice."
+                            news_headlines2 = get_stock_news(r["ticker"])
+                            news_context2 = ""
+                            if news_headlines2:
+                                news_context2 = " Recent news headlines: " + " | ".join(news_headlines2)
+                            prompt2 = "Analyze " + r["ticker"] + " for a short-term momentum trade. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ", RSI " + str(r.get("rsi","N/A")) + ", volume spike " + str(r.get("vol_spike","N/A")) + "x, " + str(r.get("pct_from_high","N/A")) + "% below 52-week high, candle closed at " + str(r.get("candle_quality","N/A")) + "% of its range." + news_context2 + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price for a short-term trade, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. This is an algorithmic estimate for research only, not financial advice."
                             msg2 = client2.messages.create(model="claude-sonnet-4-6", max_tokens=250, messages=[{"role":"user","content":prompt2}])
                         st.info(msg2.content[0].text)
 
@@ -347,8 +365,12 @@ with tab1:
                     import anthropic
                     with st.spinner("Analyzing..."):
                         client4 = anthropic.Anthropic(api_key=akey4)
-                        prompt4 = "Analyze " + d["ticker"] + " stock. Price $" + str(d["price"]) + ", change " + str(d["chg"]) + "%, RSI " + str(d.get("rsi","N/A")) + ", rating " + d["rating"] + ", target $" + str(d["target"]) + ". Give 2-3 sentence reasoning then end with SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. Research only, not financial advice."
-                        msg4 = client4.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt4}])
+                        news_headlines4 = get_stock_news(d["ticker"])
+                        news_context4 = ""
+                        if news_headlines4:
+                            news_context4 = " Recent news headlines: " + " | ".join(news_headlines4)
+                        prompt4 = "Analyze " + d["ticker"] + " for a short-term momentum trade. Price $" + str(d["price"]) + ", change " + str(d["chg"]) + "%, RSI " + str(d.get("rsi","N/A")) + ", rating " + d["rating"] + ", target $" + str(d["target"]) + "." + news_context4 + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give 2-3 sentences of reasoning, then suggest a specific BUY entry price and a SELL target price, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. Then end with SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is an algorithmic estimate for research only, not financial advice."
+                        msg4 = client4.messages.create(model="claude-sonnet-4-6", max_tokens=300, messages=[{"role":"user","content":prompt4}])
                     st.info(msg4.content[0].text)
         else:
             st.error("Could not find " + st.session_state["manual_lookup"])
@@ -408,7 +430,11 @@ with tab2:
                                     extra_context += " Stock is " + str(pct_high) + "% below its 52-week high (0% means at the high)."
                                 if candle_q is not None:
                                     extra_context += " Today's candle closed at " + str(candle_q) + "% of its daily range (100% = closed at the high, strong; 0% = closed at the low, weak, long upper wick)."
-                                prompt3 = "You are a stock trading assistant. Analyze " + tkr + " for a short-term momentum trade. Data: Price $" + str(prc) + ", change today " + str(chng) + "%, RSI " + str(rsi_v) + ", volume spike " + str(vspike) + "x, analyst rating " + rtng + ", target price $" + str(tgt) + "." + extra_context + " Give a 2-3 sentence reasoning, then suggest a specific BUY entry price and a SELL target price, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. Then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is an algorithmic estimate for research only, not financial advice."
+                                news_headlines3 = get_stock_news(tkr)
+                                news_context3 = ""
+                                if news_headlines3:
+                                    news_context3 = " Recent news headlines: " + " | ".join(news_headlines3)
+                                prompt3 = "You are a stock trading assistant. Analyze " + tkr + " for a short-term momentum trade. Data: Price $" + str(prc) + ", change today " + str(chng) + "%, RSI " + str(rsi_v) + ", volume spike " + str(vspike) + "x, analyst rating " + rtng + ", target price $" + str(tgt) + "." + extra_context + news_context3 + " If news explains the move, mention the actual catalyst. If no relevant news, note this could be a technical-only move (higher risk). Give a 2-3 sentence reasoning, then suggest a specific BUY entry price and a SELL target price, formatted exactly as: BUY: $X.XX | SELL: $Y.YY. Then end with exactly one line: SIGNAL: BUY or SIGNAL: SELL or SIGNAL: HOLD. This is an algorithmic estimate for research only, not financial advice."
                                 msg3 = client3.messages.create(model="claude-sonnet-4-6", max_tokens=200, messages=[{"role":"user","content":prompt3}])
                                 ai_text = msg3.content[0].text
                             st.info(ai_text)
