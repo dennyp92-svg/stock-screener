@@ -116,23 +116,31 @@ def get_fmp_movers():
         return []
 from concurrent.futures import ThreadPoolExecutor
 ALL_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AVGO', 'AMD', 'ORCL', 'PLTR', 'CRM', 'SNOW', 'DDOG', 'NET', 'ARM', 'SMCI', 'SOFI', 'MSTR', 'COIN', 'NFLX', 'DIS', 'ROKU', 'SPOT', 'UBER', 'ABNB', 'SQ', 'PYPL', 'HOOD', 'NU', 'V', 'MA', 'JPM', 'BAC', 'WFC', 'GS', 'MS', 'XOM', 'CVX', 'COP', 'OXY', 'JNJ', 'PFE', 'MRNA', 'LLY', 'ABBV', 'BMY', 'MRK', 'AMGN', 'COST', 'WMT', 'TGT', 'HD', 'LOW', 'BA', 'LMT', 'RTX', 'NOC', 'NIO', 'RIVN', 'LCID', 'XPEV', 'F', 'GM', 'INTC', 'QCOM', 'MU', 'AMAT', 'KLAC', 'TXN', 'ADI', 'MRVL', 'ENPH', 'FSLR', 'ALAB', 'AEHR', 'IOT', 'COHR', 'SITM', 'MARA', 'RIOT', 'CRWD', 'PANW', 'ZM', 'SHOP', 'BABA', 'JD', 'PDD', 'RKLB', 'ASTS', 'GME', 'AMC', 'IREN', 'CLSK', 'HUT', 'IBIT', 'ARKK', 'ARKG', 'IONQ', 'RGTI', 'QUBT', 'ACHR', 'JOBY', 'WKHS', 'NKLA', 'LAZR', 'LYFT', 'ARGX', 'ASML', 'AXON', 'AVXL', 'AZPN', 'ASAN', 'ARWR', 'ARVN', 'AUPH', 'APLS', 'AGIO', 'VRTX', 'REGN', 'BIIB', 'ILMN', 'ALNY', 'BMRN', 'CRSP', 'BEAM', 'EDIT', 'NTLA', 'JAZZ']
-WATCHLIST_FILE = os.path.expanduser("~/stock_screener/watchlist.json")
+from supabase import create_client
+
 def load_watchlist():
     if "watchlist_data" not in st.session_state:
         try:
-            if os.path.exists(WATCHLIST_FILE):
-                with open(WATCHLIST_FILE) as wf:
-                    st.session_state.watchlist_data = json.load(wf)
-            else:
-                st.session_state.watchlist_data = []
+            url = st.secrets["SUPABASE_URL"]
+            key = st.secrets["SUPABASE_KEY"]
+            sb = create_client(url, key)
+            result = sb.table("watchlist").select("Ticker").execute()
+            st.session_state.watchlist_data = [row["Ticker"] for row in result.data]
         except:
             st.session_state.watchlist_data = []
     return st.session_state.watchlist_data
 
 def save_watchlist(wl):
-    st.session_state.watchlist_data = wl
     try:
-        with open(WATCHLIST_FILE, "w") as wf: json.dump(wl, wf)
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        sb = create_client(url, key)
+        sb.table("watchlist").delete().neq("Ticker", "").execute()
+        for ticker in wl:
+            sb.table("watchlist").insert({"Ticker": ticker}).execute()
+    except Exception as e:
+        st.error(f"Could not save watchlist: {e}")
+    st.session_state.watchlist_data = wl
     except: pass
 @st.cache_data(ttl=120)
 def calc_rsi(prices, period=14):

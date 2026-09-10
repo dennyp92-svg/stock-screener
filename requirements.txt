@@ -4,3 +4,4 @@ streamlit
 anthropic
 python-dotenv
 requests
+supabase
