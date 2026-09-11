@@ -355,10 +355,10 @@ with tab1:
                 import anthropic
                 client = anthropic.Anthropic(api_key=akey)
                 for r in results[:5]:
-                    with st.spinner(f"Analyzing {r["ticker"]}..."):
+                    with st.spinner(f"Analyzing {r['ticker']}..."):
                         prompt = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
                         msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=150, messages=[{"role":"user","content":prompt}])
-                    st.markdown(f"**{r["ticker"]}** - ${round(r["price"],2)} - {r["chg"]}%")
+                    st.markdown(f"**{r['ticker']}** - ${round(r['price'],2)} - {r['chg']}%")
                     st.info(msg.content[0].text)
         st.divider()
         show_only_strong = st.checkbox("Show only Strong Buy", value=False)
