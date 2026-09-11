@@ -141,7 +141,6 @@ def save_watchlist(wl):
     except Exception as e:
         st.error(f"Could not save watchlist: {e}")
     st.session_state.watchlist_data = wl
-    except: pass
 @st.cache_data(ttl=120)
 def calc_rsi(prices, period=14):
     if len(prices) < period + 1:
