@@ -118,29 +118,69 @@ from concurrent.futures import ThreadPoolExecutor
 ALL_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AVGO', 'AMD', 'ORCL', 'PLTR', 'CRM', 'SNOW', 'DDOG', 'NET', 'ARM', 'SMCI', 'SOFI', 'MSTR', 'COIN', 'NFLX', 'DIS', 'ROKU', 'SPOT', 'UBER', 'ABNB', 'SQ', 'PYPL', 'HOOD', 'NU', 'V', 'MA', 'JPM', 'BAC', 'WFC', 'GS', 'MS', 'XOM', 'CVX', 'COP', 'OXY', 'JNJ', 'PFE', 'MRNA', 'LLY', 'ABBV', 'BMY', 'MRK', 'AMGN', 'COST', 'WMT', 'TGT', 'HD', 'LOW', 'BA', 'LMT', 'RTX', 'NOC', 'NIO', 'RIVN', 'LCID', 'XPEV', 'F', 'GM', 'INTC', 'QCOM', 'MU', 'AMAT', 'KLAC', 'TXN', 'ADI', 'MRVL', 'ENPH', 'FSLR', 'ALAB', 'AEHR', 'IOT', 'COHR', 'SITM', 'MARA', 'RIOT', 'CRWD', 'PANW', 'ZM', 'SHOP', 'BABA', 'JD', 'PDD', 'RKLB', 'ASTS', 'GME', 'AMC', 'IREN', 'CLSK', 'HUT', 'IBIT', 'ARKK', 'ARKG', 'IONQ', 'RGTI', 'QUBT', 'ACHR', 'JOBY', 'WKHS', 'NKLA', 'LAZR', 'LYFT', 'ARGX', 'ASML', 'AXON', 'AVXL', 'AZPN', 'ASAN', 'ARWR', 'ARVN', 'AUPH', 'APLS', 'AGIO', 'VRTX', 'REGN', 'BIIB', 'ILMN', 'ALNY', 'BMRN', 'CRSP', 'BEAM', 'EDIT', 'NTLA', 'JAZZ']
 from supabase import create_client
 
-def load_watchlist():
-    if "watchlist_data" not in st.session_state:
+def _get_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+def load_watchlist(force=False):
+    if force or "watchlist_data" not in st.session_state:
         try:
-            url = st.secrets["SUPABASE_URL"]
-            key = st.secrets["SUPABASE_KEY"]
-            sb = create_client(url, key)
+            sb = _get_supabase()
             result = sb.table("watchlist").select("Ticker").execute()
             st.session_state.watchlist_data = [row["Ticker"] for row in result.data]
-        except:
-            st.session_state.watchlist_data = []
+            st.session_state.watchlist_error = None
+        except Exception as e:
+            # Never wipe an already-loaded list just because a refresh failed,
+            # and surface the error instead of silently showing an empty list.
+            st.session_state.watchlist_error = str(e)
+            if "watchlist_data" not in st.session_state:
+                st.session_state.watchlist_data = []
     return st.session_state.watchlist_data
 
-def save_watchlist(wl):
+def add_to_watchlist(ticker):
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return False, "Empty ticker"
     try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
-        sb = create_client(url, key)
+        sb = _get_supabase()
+        existing = sb.table("watchlist").select("Ticker").eq("Ticker", ticker).execute()
+        if existing.data:
+            load_watchlist(force=True)
+            return True, "already"
+        sb.table("watchlist").insert({"Ticker": ticker}).execute()
+        load_watchlist(force=True)
+        if ticker in st.session_state.get("watchlist_data", []):
+            return True, "added"
+        return False, "Write did not persist - check the Supabase table name/columns and RLS policies"
+    except Exception as e:
+        return False, str(e)
+
+def remove_from_watchlist(ticker):
+    ticker = (ticker or "").strip().upper()
+    try:
+        sb = _get_supabase()
+        sb.table("watchlist").delete().eq("Ticker", ticker).execute()
+        load_watchlist(force=True)
+        if ticker not in st.session_state.get("watchlist_data", []):
+            return True, "removed"
+        return False, "Delete did not persist - check the Supabase RLS policies"
+    except Exception as e:
+        return False, str(e)
+
+def save_watchlist(wl):
+    # Full replace of the table. Kept for backward compatibility; add/remove
+    # helpers above are preferred because they can't wipe the list on error.
+    try:
+        sb = _get_supabase()
         sb.table("watchlist").delete().neq("Ticker", "").execute()
         for ticker in wl:
             sb.table("watchlist").insert({"Ticker": ticker}).execute()
+        load_watchlist(force=True)
+        return True, "saved"
     except Exception as e:
         st.error(f"Could not save watchlist: {e}")
-    st.session_state.watchlist_data = wl
+        return False, str(e)
 @st.cache_data(ttl=120)
 def calc_rsi(prices, period=14):
     if len(prices) < period + 1:
@@ -323,14 +363,13 @@ with tab1:
                                     st.info(msg.content[0].text)
 
                             if st.button("+ Add to Watchlist", key="scanadd_" + r["ticker"], use_container_width=True):
-                                fresh_watchlist = load_watchlist()
-                                if r["ticker"] not in fresh_watchlist:
-                                    fresh_watchlist.append(r["ticker"])
-                                    save_watchlist(fresh_watchlist)
-                                    st.session_state["watchlist_data"] = fresh_watchlist
+                                ok, info = add_to_watchlist(r["ticker"])
+                                if ok and info == "added":
                                     st.success("Added " + r["ticker"] + " to watchlist!")
-                                else:
+                                elif ok:
                                     st.info(r["ticker"] + " already in watchlist")
+                                else:
+                                    st.error("Could not add " + r["ticker"] + ": " + info)
 
                 render_results_list(display_results)
 
@@ -409,14 +448,13 @@ with tab1:
                         st.info(result2)
 
                 if st.button("+ Add to Watchlist", key="scanadd2_" + r["ticker"], use_container_width=True):
-                    fresh_watchlist2 = load_watchlist()
-                    if r["ticker"] not in fresh_watchlist2:
-                        fresh_watchlist2.append(r["ticker"])
-                        save_watchlist(fresh_watchlist2)
-                        st.session_state["watchlist_data"] = fresh_watchlist2
+                    ok, info = add_to_watchlist(r["ticker"])
+                    if ok and info == "added":
                         st.success("Added " + r["ticker"] + " to watchlist!")
-                    else:
+                    elif ok:
                         st.info(r["ticker"] + " already in watchlist")
+                    else:
+                        st.error("Could not add " + r["ticker"] + ": " + info)
 
     if st.session_state.get("manual_lookup"):
         d = get_stock_data(st.session_state["manual_lookup"])
@@ -436,13 +474,13 @@ with tab1:
 
             extra_col1, extra_col2 = st.columns(2)
             if extra_col1.button("+ Add to Watchlist", key="extra_add"):
-                fresh_wl = load_watchlist()
-                if d["ticker"] not in fresh_wl:
-                    fresh_wl.append(d["ticker"])
-                    save_watchlist(fresh_wl)
+                ok, info = add_to_watchlist(d["ticker"])
+                if ok and info == "added":
                     st.success("Added " + d["ticker"] + " to watchlist!")
-                else:
+                elif ok:
                     st.info(d["ticker"] + " already in watchlist")
+                else:
+                    st.error("Could not add " + d["ticker"] + ": " + info)
 
             if extra_col2.button("Get AI Analysis", key="extra_ai"):
                 try:
@@ -477,14 +515,18 @@ with tab1:
 
 with tab2:
     st.title("My Watchlist")
+    if st.session_state.get("watchlist_error"):
+        st.error("Watchlist database error: " + st.session_state["watchlist_error"])
     add_manual = st.text_input("Add ticker to watchlist", "").upper().strip()
     if st.button("Add") and add_manual:
-        if add_manual not in watchlist:
-            watchlist.append(add_manual)
-            save_watchlist(watchlist)
+        ok, info = add_to_watchlist(add_manual)
+        if ok and info == "added":
             st.success(f"Added {add_manual}")
-        else:
+            st.rerun()
+        elif ok:
             st.warning(f"{add_manual} already in watchlist")
+        else:
+            st.error(f"Could not add {add_manual}: {info}")
     if watchlist:
         alert_email = st.text_input("Your email for alerts", key="watchlist_email")
         auto_threshold = st.number_input("Auto-alert if change % exceeds", value=5.0, step=1.0)
@@ -586,8 +628,9 @@ with tab2:
                             else:
                                 st.error("Failed: " + msg2)
                     if c8.button("Remove", key="rem_" + ticker):
-                        watchlist.remove(ticker)
-                        save_watchlist(watchlist)
+                        ok, info = remove_from_watchlist(ticker)
+                        if not ok:
+                            st.error("Could not remove " + ticker + ": " + info)
                         st.rerun()
             else:
                 st.warning("Could not fetch data for " + ticker)
