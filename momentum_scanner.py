@@ -9,7 +9,7 @@ def send_email_alert(to_email, subject, body):
     try:
         gmail_user = st.secrets.get("GMAIL_ADDRESS", os.getenv("GMAIL_ADDRESS"))
         gmail_pass = st.secrets.get("GMAIL_APP_PASSWORD", os.getenv("GMAIL_APP_PASSWORD"))
-    except:
+    except Exception:
         gmail_user = os.getenv("GMAIL_ADDRESS")
         gmail_pass = os.getenv("GMAIL_APP_PASSWORD")
     if not gmail_user or not gmail_pass:
@@ -31,13 +31,13 @@ from dotenv import load_dotenv
 load_dotenv()
 try:
     FMP_KEY = st.secrets.get("FMP_KEY", os.getenv("FMP_KEY"))
-except:
+except Exception:
     FMP_KEY = os.getenv("FMP_KEY")
 
 def analyze_one_stock(r):
     try:
         akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-    except:
+    except Exception:
         akey = os.getenv("ANTHROPIC_KEY")
     if not akey:
         return (r["ticker"], None)
@@ -63,7 +63,7 @@ def analyze_one_stock(r):
         if "not financial advice" not in result_text.lower():
             result_text += "\n\n*This is an algorithmic estimate for research purposes only. Not financial advice.*"
         return (r["ticker"], result_text)
-    except:
+    except Exception:
         return (r["ticker"], None)
 
 def get_ai_batch(stocks_list):
@@ -84,7 +84,7 @@ def get_float_data(ticker):
         r = requests.get(url, timeout=8).json()
         if r and len(r) > 0:
             return r[0].get("floatShares", None)
-    except:
+    except Exception:
         pass
     return None
 
@@ -95,7 +95,7 @@ def get_stock_news(ticker):
         r = requests.get(url, timeout=8).json()
         headlines = [item["title"] for item in r if "title" in item]
         return headlines
-    except:
+    except Exception:
         return []
 
 def get_fmp_movers():
@@ -112,7 +112,7 @@ def get_fmp_movers():
         t3 = [s["symbol"] for s in r3 if "symbol" in s]
         combined = list(dict.fromkeys(t1 + t2 + t3))
         return combined
-    except:
+    except Exception:
         return []
 from concurrent.futures import ThreadPoolExecutor
 ALL_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AVGO', 'AMD', 'ORCL', 'PLTR', 'CRM', 'SNOW', 'DDOG', 'NET', 'ARM', 'SMCI', 'SOFI', 'MSTR', 'COIN', 'NFLX', 'DIS', 'ROKU', 'SPOT', 'UBER', 'ABNB', 'SQ', 'PYPL', 'HOOD', 'NU', 'V', 'MA', 'JPM', 'BAC', 'WFC', 'GS', 'MS', 'XOM', 'CVX', 'COP', 'OXY', 'JNJ', 'PFE', 'MRNA', 'LLY', 'ABBV', 'BMY', 'MRK', 'AMGN', 'COST', 'WMT', 'TGT', 'HD', 'LOW', 'BA', 'LMT', 'RTX', 'NOC', 'NIO', 'RIVN', 'LCID', 'XPEV', 'F', 'GM', 'INTC', 'QCOM', 'MU', 'AMAT', 'KLAC', 'TXN', 'ADI', 'MRVL', 'ENPH', 'FSLR', 'ALAB', 'AEHR', 'IOT', 'COHR', 'SITM', 'MARA', 'RIOT', 'CRWD', 'PANW', 'ZM', 'SHOP', 'BABA', 'JD', 'PDD', 'RKLB', 'ASTS', 'GME', 'AMC', 'IREN', 'CLSK', 'HUT', 'IBIT', 'ARKK', 'ARKG', 'IONQ', 'RGTI', 'QUBT', 'ACHR', 'JOBY', 'WKHS', 'NKLA', 'LAZR', 'LYFT', 'ARGX', 'ASML', 'AXON', 'AVXL', 'AZPN', 'ASAN', 'ARWR', 'ARVN', 'AUPH', 'APLS', 'AGIO', 'VRTX', 'REGN', 'BIIB', 'ILMN', 'ALNY', 'BMRN', 'CRSP', 'BEAM', 'EDIT', 'NTLA', 'JAZZ']
@@ -228,7 +228,7 @@ def get_stock_data(ticker):
                 candle_quality = 100
 
             return {"ticker":ticker,"price":curr,"chg":chg,"rating":rating,"target":info.get("targetMeanPrice","N/A"),"vol_spike":vol_spike,"high":week52_high,"low":info.get("fiftyTwoWeekLow",0),"sector":info.get("sector","N/A"),"rsi":rsi_val,"pct_from_high":pct_from_high,"candle_quality":candle_quality}
-    except: pass
+    except Exception: pass
     return None
 st.set_page_config(page_title="Stock Scanner Pro", page_icon="📈", layout="wide")
 
@@ -300,7 +300,7 @@ with tab1:
                 if st.button("Analyze Top 5 with AI"):
                     try:
                         akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                    except:
+                    except Exception:
                         akey = os.getenv("ANTHROPIC_KEY")
                     if akey:
                         import anthropic
@@ -349,7 +349,7 @@ with tab1:
                                 import anthropic
                                 try:
                                     akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                                except:
+                                except Exception:
                                     akey = os.getenv("ANTHROPIC_KEY")
                                 if akey:
                                     with st.spinner("Getting AI analysis..."):
@@ -388,7 +388,7 @@ with tab1:
         if st.button("Analyze Top 5 with AI", key="analyze_saved"):
             try:
                 akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-            except:
+            except Exception:
                 akey = os.getenv("ANTHROPIC_KEY")
             if akey:
                 import anthropic
@@ -422,7 +422,7 @@ with tab1:
                     import anthropic
                     try:
                         akey2 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                    except:
+                    except Exception:
                         akey2 = os.getenv("ANTHROPIC_KEY")
                     if akey2:
                         with st.spinner("Getting AI analysis..."):
@@ -485,7 +485,7 @@ with tab1:
             if extra_col2.button("Get AI Analysis", key="extra_ai"):
                 try:
                     akey4 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                except:
+                except Exception:
                     akey4 = os.getenv("ANTHROPIC_KEY")
                 if akey4:
                     import anthropic
@@ -561,7 +561,7 @@ with tab2:
                         st.subheader(tkr)
                         try:
                             akey3 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                        except:
+                        except Exception:
                             akey3 = os.getenv("ANTHROPIC_KEY")
                         if akey3:
                             import anthropic
