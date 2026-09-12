@@ -124,7 +124,7 @@ def load_watchlist():
             url = st.secrets["SUPABASE_URL"]
             key = st.secrets["SUPABASE_KEY"]
             sb = create_client(url, key)
-            result = sb.table("watchlist").select("Ticker").execute()
+            result = sb.table("Watchlist").select("Ticker").execute()
             st.session_state.watchlist_data = [row["Ticker"] for row in result.data]
         except:
             st.session_state.watchlist_data = []
@@ -135,9 +135,9 @@ def save_watchlist(wl):
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
         sb = create_client(url, key)
-        sb.table("watchlist").delete().neq("Ticker", "").execute()
+        sb.table("Watchlist").delete().neq("Ticker", "").execute()
         for ticker in wl:
-            sb.table("watchlist").insert({"Ticker": ticker}).execute()
+            sb.table("Watchlist").insert({"Ticker": ticker}).execute()
     except Exception as e:
         st.error(f"Could not save watchlist: {e}")
     st.session_state.watchlist_data = wl
