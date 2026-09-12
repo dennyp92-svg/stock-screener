@@ -2,3 +2,5 @@
 results.csv
 .DS_Store
 watchlist.json
+__pycache__/
+*.pyc

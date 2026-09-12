@@ -9,7 +9,7 @@ def send_email_alert(to_email, subject, body):
     try:
         gmail_user = st.secrets.get("GMAIL_ADDRESS", os.getenv("GMAIL_ADDRESS"))
         gmail_pass = st.secrets.get("GMAIL_APP_PASSWORD", os.getenv("GMAIL_APP_PASSWORD"))
-    except:
+    except Exception:
         gmail_user = os.getenv("GMAIL_ADDRESS")
         gmail_pass = os.getenv("GMAIL_APP_PASSWORD")
     if not gmail_user or not gmail_pass:
@@ -31,13 +31,13 @@ from dotenv import load_dotenv
 load_dotenv()
 try:
     FMP_KEY = st.secrets.get("FMP_KEY", os.getenv("FMP_KEY"))
-except:
+except Exception:
     FMP_KEY = os.getenv("FMP_KEY")
 
 def analyze_one_stock(r):
     try:
         akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-    except:
+    except Exception:
         akey = os.getenv("ANTHROPIC_KEY")
     if not akey:
         return (r["ticker"], None)
@@ -63,7 +63,7 @@ def analyze_one_stock(r):
         if "not financial advice" not in result_text.lower():
             result_text += "\n\n*This is an algorithmic estimate for research purposes only. Not financial advice.*"
         return (r["ticker"], result_text)
-    except:
+    except Exception:
         return (r["ticker"], None)
 
 def get_ai_batch(stocks_list):
@@ -84,7 +84,7 @@ def get_float_data(ticker):
         r = requests.get(url, timeout=8).json()
         if r and len(r) > 0:
             return r[0].get("floatShares", None)
-    except:
+    except Exception:
         pass
     return None
 
@@ -95,7 +95,7 @@ def get_stock_news(ticker):
         r = requests.get(url, timeout=8).json()
         headlines = [item["title"] for item in r if "title" in item]
         return headlines
-    except:
+    except Exception:
         return []
 
 def get_fmp_movers():
@@ -112,35 +112,89 @@ def get_fmp_movers():
         t3 = [s["symbol"] for s in r3 if "symbol" in s]
         combined = list(dict.fromkeys(t1 + t2 + t3))
         return combined
-    except:
+    except Exception:
         return []
 from concurrent.futures import ThreadPoolExecutor
 ALL_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AVGO', 'AMD', 'ORCL', 'PLTR', 'CRM', 'SNOW', 'DDOG', 'NET', 'ARM', 'SMCI', 'SOFI', 'MSTR', 'COIN', 'NFLX', 'DIS', 'ROKU', 'SPOT', 'UBER', 'ABNB', 'SQ', 'PYPL', 'HOOD', 'NU', 'V', 'MA', 'JPM', 'BAC', 'WFC', 'GS', 'MS', 'XOM', 'CVX', 'COP', 'OXY', 'JNJ', 'PFE', 'MRNA', 'LLY', 'ABBV', 'BMY', 'MRK', 'AMGN', 'COST', 'WMT', 'TGT', 'HD', 'LOW', 'BA', 'LMT', 'RTX', 'NOC', 'NIO', 'RIVN', 'LCID', 'XPEV', 'F', 'GM', 'INTC', 'QCOM', 'MU', 'AMAT', 'KLAC', 'TXN', 'ADI', 'MRVL', 'ENPH', 'FSLR', 'ALAB', 'AEHR', 'IOT', 'COHR', 'SITM', 'MARA', 'RIOT', 'CRWD', 'PANW', 'ZM', 'SHOP', 'BABA', 'JD', 'PDD', 'RKLB', 'ASTS', 'GME', 'AMC', 'IREN', 'CLSK', 'HUT', 'IBIT', 'ARKK', 'ARKG', 'IONQ', 'RGTI', 'QUBT', 'ACHR', 'JOBY', 'WKHS', 'NKLA', 'LAZR', 'LYFT', 'ARGX', 'ASML', 'AXON', 'AVXL', 'AZPN', 'ASAN', 'ARWR', 'ARVN', 'AUPH', 'APLS', 'AGIO', 'VRTX', 'REGN', 'BIIB', 'ILMN', 'ALNY', 'BMRN', 'CRSP', 'BEAM', 'EDIT', 'NTLA', 'JAZZ']
 from supabase import create_client
 
-def load_watchlist():
-    if "watchlist_data" not in st.session_state:
+def _get_supabase():
+    try:
+        url = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
+        key = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY"))
+    except Exception:
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
+    # Normalize common misconfigurations that cause "Invalid URL".
+    url = (url or "").strip().strip('"').strip("'").rstrip("/")
+    key = (key or "").strip()
+    if not url or not key:
+        raise ValueError(
+            "SUPABASE_URL and/or SUPABASE_KEY is not set. Add them in your app "
+            "secrets. SUPABASE_URL must look like https://<project>.supabase.co"
+        )
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+    return create_client(url, key)
+
+def load_watchlist(force=False):
+    if force or "watchlist_data" not in st.session_state:
         try:
-            url = st.secrets["SUPABASE_URL"]
-            key = st.secrets["SUPABASE_KEY"]
-            sb = create_client(url, key)
+            sb = _get_supabase()
             result = sb.table("Watchlist").select("Ticker").execute()
             st.session_state.watchlist_data = [row["Ticker"] for row in result.data]
-        except:
-            st.session_state.watchlist_data = []
+            st.session_state.watchlist_error = None
+        except Exception as e:
+            # Never wipe an already-loaded list just because a refresh failed,
+            # and surface the error instead of silently showing an empty list.
+            st.session_state.watchlist_error = str(e)
+            if "watchlist_data" not in st.session_state:
+                st.session_state.watchlist_data = []
     return st.session_state.watchlist_data
 
-def save_watchlist(wl):
+def add_to_watchlist(ticker):
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return False, "Empty ticker"
     try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
-        sb = create_client(url, key)
+        sb = _get_supabase()
+        existing = sb.table("Watchlist").select("Ticker").eq("Ticker", ticker).execute()
+        if existing.data:
+            load_watchlist(force=True)
+            return True, "already"
+        sb.table("Watchlist").insert({"Ticker": ticker}).execute()
+        load_watchlist(force=True)
+        if ticker in st.session_state.get("watchlist_data", []):
+            return True, "added"
+        return False, "Write did not persist - check the Supabase table name/columns and RLS policies"
+    except Exception as e:
+        return False, str(e)
+
+def remove_from_watchlist(ticker):
+    ticker = (ticker or "").strip().upper()
+    try:
+        sb = _get_supabase()
+        sb.table("Watchlist").delete().eq("Ticker", ticker).execute()
+        load_watchlist(force=True)
+        if ticker not in st.session_state.get("watchlist_data", []):
+            return True, "removed"
+        return False, "Delete did not persist - check the Supabase RLS policies"
+    except Exception as e:
+        return False, str(e)
+
+def save_watchlist(wl):
+    # Full replace of the table. Kept for backward compatibility; add/remove
+    # helpers above are preferred because they can't wipe the list on error.
+    try:
+        sb = _get_supabase()
         sb.table("Watchlist").delete().neq("Ticker", "").execute()
         for ticker in wl:
             sb.table("Watchlist").insert({"Ticker": ticker}).execute()
+        load_watchlist(force=True)
+        return True, "saved"
     except Exception as e:
         st.error(f"Could not save watchlist: {e}")
-    st.session_state.watchlist_data = wl
+        return False, str(e)
 @st.cache_data(ttl=120)
 def calc_rsi(prices, period=14):
     if len(prices) < period + 1:
@@ -188,7 +242,7 @@ def get_stock_data(ticker):
                 candle_quality = 100
 
             return {"ticker":ticker,"price":curr,"chg":chg,"rating":rating,"target":info.get("targetMeanPrice","N/A"),"vol_spike":vol_spike,"high":week52_high,"low":info.get("fiftyTwoWeekLow",0),"sector":info.get("sector","N/A"),"rsi":rsi_val,"pct_from_high":pct_from_high,"candle_quality":candle_quality}
-    except: pass
+    except Exception: pass
     return None
 st.set_page_config(page_title="Stock Scanner Pro", page_icon="📈", layout="wide")
 
@@ -260,7 +314,7 @@ with tab1:
                 if st.button("Analyze Top 5 with AI"):
                     try:
                         akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                    except:
+                    except Exception:
                         akey = os.getenv("ANTHROPIC_KEY")
                     if akey:
                         import anthropic
@@ -309,7 +363,7 @@ with tab1:
                                 import anthropic
                                 try:
                                     akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                                except:
+                                except Exception:
                                     akey = os.getenv("ANTHROPIC_KEY")
                                 if akey:
                                     with st.spinner("Getting AI analysis..."):
@@ -323,14 +377,13 @@ with tab1:
                                     st.info(msg.content[0].text)
 
                             if st.button("+ Add to Watchlist", key="scanadd_" + r["ticker"], use_container_width=True):
-                                fresh_watchlist = load_watchlist()
-                                if r["ticker"] not in fresh_watchlist:
-                                    fresh_watchlist.append(r["ticker"])
-                                    save_watchlist(fresh_watchlist)
-                                    st.session_state["watchlist_data"] = fresh_watchlist
+                                ok, info = add_to_watchlist(r["ticker"])
+                                if ok and info == "added":
                                     st.success("Added " + r["ticker"] + " to watchlist!")
-                                else:
+                                elif ok:
                                     st.info(r["ticker"] + " already in watchlist")
+                                else:
+                                    st.error("Could not add " + r["ticker"] + ": " + info)
 
                 render_results_list(display_results)
 
@@ -349,16 +402,16 @@ with tab1:
         if st.button("Analyze Top 5 with AI", key="analyze_saved"):
             try:
                 akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-            except:
+            except Exception:
                 akey = os.getenv("ANTHROPIC_KEY")
             if akey:
                 import anthropic
                 client = anthropic.Anthropic(api_key=akey)
                 for r in results[:5]:
-                    with st.spinner(f"Analyzing {r["ticker"]}..."):
+                    with st.spinner(f"Analyzing {r['ticker']}..."):
                         prompt = "Analyze " + r["ticker"] + " stock in 3 sentences. Price $" + str(r["price"]) + ", change " + str(r["chg"]) + "%, rating " + r["rating"] + ". End with AI RATING: STRONG BUY/BUY/HOLD/AVOID. Research only, not financial advice."
                         msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=150, messages=[{"role":"user","content":prompt}])
-                    st.markdown(f"**{r["ticker"]}** - ${round(r["price"],2)} - {r["chg"]}%")
+                    st.markdown(f"**{r['ticker']}** - ${round(r['price'],2)} - {r['chg']}%")
                     st.info(msg.content[0].text)
         st.divider()
         show_only_strong = st.checkbox("Show only Strong Buy", value=False)
@@ -383,7 +436,7 @@ with tab1:
                     import anthropic
                     try:
                         akey2 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                    except:
+                    except Exception:
                         akey2 = os.getenv("ANTHROPIC_KEY")
                     if akey2:
                         with st.spinner("Getting AI analysis..."):
@@ -409,14 +462,13 @@ with tab1:
                         st.info(result2)
 
                 if st.button("+ Add to Watchlist", key="scanadd2_" + r["ticker"], use_container_width=True):
-                    fresh_watchlist2 = load_watchlist()
-                    if r["ticker"] not in fresh_watchlist2:
-                        fresh_watchlist2.append(r["ticker"])
-                        save_watchlist(fresh_watchlist2)
-                        st.session_state["watchlist_data"] = fresh_watchlist2
+                    ok, info = add_to_watchlist(r["ticker"])
+                    if ok and info == "added":
                         st.success("Added " + r["ticker"] + " to watchlist!")
-                    else:
+                    elif ok:
                         st.info(r["ticker"] + " already in watchlist")
+                    else:
+                        st.error("Could not add " + r["ticker"] + ": " + info)
 
     if st.session_state.get("manual_lookup"):
         d = get_stock_data(st.session_state["manual_lookup"])
@@ -436,18 +488,18 @@ with tab1:
 
             extra_col1, extra_col2 = st.columns(2)
             if extra_col1.button("+ Add to Watchlist", key="extra_add"):
-                fresh_wl = load_watchlist()
-                if d["ticker"] not in fresh_wl:
-                    fresh_wl.append(d["ticker"])
-                    save_watchlist(fresh_wl)
+                ok, info = add_to_watchlist(d["ticker"])
+                if ok and info == "added":
                     st.success("Added " + d["ticker"] + " to watchlist!")
-                else:
+                elif ok:
                     st.info(d["ticker"] + " already in watchlist")
+                else:
+                    st.error("Could not add " + d["ticker"] + ": " + info)
 
             if extra_col2.button("Get AI Analysis", key="extra_ai"):
                 try:
                     akey4 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                except:
+                except Exception:
                     akey4 = os.getenv("ANTHROPIC_KEY")
                 if akey4:
                     import anthropic
@@ -477,14 +529,18 @@ with tab1:
 
 with tab2:
     st.title("My Watchlist")
+    if st.session_state.get("watchlist_error"):
+        st.error("Watchlist database error: " + st.session_state["watchlist_error"])
     add_manual = st.text_input("Add ticker to watchlist", "").upper().strip()
     if st.button("Add") and add_manual:
-        if add_manual not in watchlist:
-            watchlist.append(add_manual)
-            save_watchlist(watchlist)
+        ok, info = add_to_watchlist(add_manual)
+        if ok and info == "added":
             st.success(f"Added {add_manual}")
-        else:
+            st.rerun()
+        elif ok:
             st.warning(f"{add_manual} already in watchlist")
+        else:
+            st.error(f"Could not add {add_manual}: {info}")
     if watchlist:
         alert_email = st.text_input("Your email for alerts", key="watchlist_email")
         auto_threshold = st.number_input("Auto-alert if change % exceeds", value=5.0, step=1.0)
@@ -519,7 +575,7 @@ with tab2:
                         st.subheader(tkr)
                         try:
                             akey3 = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
-                        except:
+                        except Exception:
                             akey3 = os.getenv("ANTHROPIC_KEY")
                         if akey3:
                             import anthropic
@@ -586,8 +642,9 @@ with tab2:
                             else:
                                 st.error("Failed: " + msg2)
                     if c8.button("Remove", key="rem_" + ticker):
-                        watchlist.remove(ticker)
-                        save_watchlist(watchlist)
+                        ok, info = remove_from_watchlist(ticker)
+                        if not ok:
+                            st.error("Could not remove " + ticker + ": " + info)
                         st.rerun()
             else:
                 st.warning("Could not fetch data for " + ticker)
