@@ -141,7 +141,7 @@ def load_watchlist(force=False):
     if force or "watchlist_data" not in st.session_state:
         try:
             sb = _get_supabase()
-            result = sb.table("watchlist").select("Ticker").execute()
+            result = sb.table("Watchlist").select("Ticker").execute()
             st.session_state.watchlist_data = [row["Ticker"] for row in result.data]
             st.session_state.watchlist_error = None
         except Exception as e:
@@ -158,11 +158,11 @@ def add_to_watchlist(ticker):
         return False, "Empty ticker"
     try:
         sb = _get_supabase()
-        existing = sb.table("watchlist").select("Ticker").eq("Ticker", ticker).execute()
+        existing = sb.table("Watchlist").select("Ticker").eq("Ticker", ticker).execute()
         if existing.data:
             load_watchlist(force=True)
             return True, "already"
-        sb.table("watchlist").insert({"Ticker": ticker}).execute()
+        sb.table("Watchlist").insert({"Ticker": ticker}).execute()
         load_watchlist(force=True)
         if ticker in st.session_state.get("watchlist_data", []):
             return True, "added"
@@ -174,7 +174,7 @@ def remove_from_watchlist(ticker):
     ticker = (ticker or "").strip().upper()
     try:
         sb = _get_supabase()
-        sb.table("watchlist").delete().eq("Ticker", ticker).execute()
+        sb.table("Watchlist").delete().eq("Ticker", ticker).execute()
         load_watchlist(force=True)
         if ticker not in st.session_state.get("watchlist_data", []):
             return True, "removed"
@@ -187,9 +187,9 @@ def save_watchlist(wl):
     # helpers above are preferred because they can't wipe the list on error.
     try:
         sb = _get_supabase()
-        sb.table("watchlist").delete().neq("Ticker", "").execute()
+        sb.table("Watchlist").delete().neq("Ticker", "").execute()
         for ticker in wl:
-            sb.table("watchlist").insert({"Ticker": ticker}).execute()
+            sb.table("Watchlist").insert({"Ticker": ticker}).execute()
         load_watchlist(force=True)
         return True, "saved"
     except Exception as e:
