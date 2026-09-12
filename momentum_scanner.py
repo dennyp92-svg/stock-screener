@@ -119,8 +119,22 @@ ALL_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AVGO', 
 from supabase import create_client
 
 def _get_supabase():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
+    try:
+        url = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
+        key = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY"))
+    except Exception:
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
+    # Normalize common misconfigurations that cause "Invalid URL".
+    url = (url or "").strip().strip('"').strip("'").rstrip("/")
+    key = (key or "").strip()
+    if not url or not key:
+        raise ValueError(
+            "SUPABASE_URL and/or SUPABASE_KEY is not set. Add them in your app "
+            "secrets. SUPABASE_URL must look like https://<project>.supabase.co"
+        )
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
     return create_client(url, key)
 
 def load_watchlist(force=False):
