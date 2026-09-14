@@ -27,6 +27,7 @@ def send_email_alert(to_email, subject, body):
         return True, "Sent successfully"
     except Exception as e:
         return False, str(e)
+
 from dotenv import load_dotenv
 load_dotenv()
 try:
@@ -114,8 +115,11 @@ def get_fmp_movers():
         return combined
     except Exception:
         return []
+
 from concurrent.futures import ThreadPoolExecutor
+
 ALL_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AVGO', 'AMD', 'ORCL', 'PLTR', 'CRM', 'SNOW', 'DDOG', 'NET', 'ARM', 'SMCI', 'SOFI', 'MSTR', 'COIN', 'NFLX', 'DIS', 'ROKU', 'SPOT', 'UBER', 'ABNB', 'SQ', 'PYPL', 'HOOD', 'NU', 'V', 'MA', 'JPM', 'BAC', 'WFC', 'GS', 'MS', 'XOM', 'CVX', 'COP', 'OXY', 'JNJ', 'PFE', 'MRNA', 'LLY', 'ABBV', 'BMY', 'MRK', 'AMGN', 'COST', 'WMT', 'TGT', 'HD', 'LOW', 'BA', 'LMT', 'RTX', 'NOC', 'NIO', 'RIVN', 'LCID', 'XPEV', 'F', 'GM', 'INTC', 'QCOM', 'MU', 'AMAT', 'KLAC', 'TXN', 'ADI', 'MRVL', 'ENPH', 'FSLR', 'ALAB', 'AEHR', 'IOT', 'COHR', 'SITM', 'MARA', 'RIOT', 'CRWD', 'PANW', 'ZM', 'SHOP', 'BABA', 'JD', 'PDD', 'RKLB', 'ASTS', 'GME', 'AMC', 'IREN', 'CLSK', 'HUT', 'IBIT', 'ARKK', 'ARKG', 'IONQ', 'RGTI', 'QUBT', 'ACHR', 'JOBY', 'WKHS', 'NKLA', 'LAZR', 'LYFT', 'ARGX', 'ASML', 'AXON', 'AVXL', 'AZPN', 'ASAN', 'ARWR', 'ARVN', 'AUPH', 'APLS', 'AGIO', 'VRTX', 'REGN', 'BIIB', 'ILMN', 'ALNY', 'BMRN', 'CRSP', 'BEAM', 'EDIT', 'NTLA', 'JAZZ']
+
 from supabase import create_client
 
 def _get_supabase():
@@ -125,14 +129,10 @@ def _get_supabase():
     except Exception:
         url = os.getenv("SUPABASE_URL")
         key = os.getenv("SUPABASE_KEY")
-    # Normalize common misconfigurations that cause "Invalid URL".
     url = (url or "").strip().strip('"').strip("'").rstrip("/")
     key = (key or "").strip()
     if not url or not key:
-        raise ValueError(
-            "SUPABASE_URL and/or SUPABASE_KEY is not set. Add them in your app "
-            "secrets. SUPABASE_URL must look like https://<project>.supabase.co"
-        )
+        raise ValueError("SUPABASE_URL and/or SUPABASE_KEY is not set.")
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
     return create_client(url, key)
@@ -145,8 +145,6 @@ def load_watchlist(force=False):
             st.session_state.watchlist_data = [row["Ticker"] for row in result.data]
             st.session_state.watchlist_error = None
         except Exception as e:
-            # Never wipe an already-loaded list just because a refresh failed,
-            # and surface the error instead of silently showing an empty list.
             st.session_state.watchlist_error = str(e)
             if "watchlist_data" not in st.session_state:
                 st.session_state.watchlist_data = []
@@ -183,8 +181,6 @@ def remove_from_watchlist(ticker):
         return False, str(e)
 
 def save_watchlist(wl):
-    # Full replace of the table. Kept for backward compatibility; add/remove
-    # helpers above are preferred because they can't wipe the list on error.
     try:
         sb = _get_supabase()
         sb.table("Watchlist").delete().neq("Ticker", "").execute()
@@ -195,6 +191,7 @@ def save_watchlist(wl):
     except Exception as e:
         st.error(f"Could not save watchlist: {e}")
         return False, str(e)
+
 @st.cache_data(ttl=120)
 def calc_rsi(prices, period=14):
     if len(prices) < period + 1:
@@ -229,10 +226,8 @@ def get_stock_data(ticker):
             elif rec == "hold": rating = "HOLD"
             elif rec == "sell": rating = "SELL"
             else: rating = "N/A"
-
             week52_high = info.get("fiftyTwoWeekHigh", 0)
             pct_from_high = round(((week52_high - curr) / week52_high) * 100, 1) if week52_high > 0 else None
-
             today_high = float(hist["High"].iloc[-1])
             today_low = float(hist["Low"].iloc[-1])
             candle_range = today_high - today_low
@@ -240,10 +235,10 @@ def get_stock_data(ticker):
                 candle_quality = round(((curr - today_low) / candle_range) * 100, 1)
             else:
                 candle_quality = 100
-
-            return {"ticker":ticker,"price":curr,"chg":chg,"rating":rating,"target":info.get("targetMeanPrice","N/A"),"vol_spike":vol_spike,"high":week52_high,"low":info.get("fiftyTwoWeekLow",0),"sector":info.get("sector","N/A"),"rsi":rsi_val,"pct_from_high":pct_from_high,"candle_quality":candle_quality}
+            return {"ticker":ticker,"price":curr,"chg":chg,"rating":rating,"target":info.get("targetMeanPrice","N/A"),"vol_spike":vol_spike,"vol":vol,"avg_vol":avg_vol,"high":week52_high,"low":info.get("fiftyTwoWeekLow",0),"sector":info.get("sector","N/A"),"rsi":rsi_val,"pct_from_high":pct_from_high,"candle_quality":candle_quality}
     except Exception: pass
     return None
+
 st.set_page_config(page_title="Stock Scanner Pro", page_icon="📈", layout="wide")
 
 st.markdown("""
@@ -253,29 +248,45 @@ st.markdown("""
     header {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
+
 watchlist = load_watchlist()
 st.title("Stock Scanner Pro")
 st.caption("⚠️ For research and informational purposes only. Not financial advice. All data, ratings, and AI-generated analysis are estimates and should not be the sole basis for investment decisions.")
+
 with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
     col1, col2, col3 = st.columns(3)
-    min_change = col1.number_input("Min %", value=0)
-    max_change = col2.number_input("Max %", value=100)
-    min_vol_pct = col3.number_input("Vol Spike %", value=0, step=25, help="e.g. 200 means volume is 2x normal")
-    min_vol = min_vol_pct / 100
+
+    # FIX 1 — Min % Change now accepts decimals
+    min_change = col1.number_input("Min % Change", value=1.0, step=0.1, format="%.1f")
+
+    # FIX 2 — Max % Change now accepts decimals
+    max_change = col2.number_input("Max % Change", value=8.0, step=0.1, format="%.1f")
+
+    # FIX 3 — Volume Spike now accepts decimals and is direct multiplier
+    min_vol_spike = col3.number_input("Min Vol Spike (x)", value=1.5, step=0.1, format="%.1f", help="e.g. 1.5 means volume is 1.5x the average")
+
     col4, col5 = st.columns(2)
-    min_price = col4.number_input("Min $", value=1)
-    max_price = col5.number_input("Max $", value=1000)
+    min_price = col4.number_input("Min Price $", value=30)
+    max_price = col5.number_input("Max Price $", value=500)
+
+    # FIX 4 — New minimum volume field
+    min_volume = st.number_input("Min Volume (shares)", value=1000000, step=100000, help="Minimum number of shares traded today. 1000000 = 1 million")
+
     use_live = True
     show_ai = st.checkbox("Enable AI Analysis", value=False)
     auto_ai_strong = st.checkbox("Auto-run AI on Strong Buy stocks", value=False)
 
     extra = st.text_input("Look up any ticker", "").upper().strip()
     run = st.button("Run Scan", use_container_width=True)
+
     if "results" not in st.session_state:
         st.session_state.results = None
         st.session_state.tickers_scanned = 0
+
     st.caption("Live market discovery enabled - real movers pulled fresh each scan")
+
 tab1, tab2 = st.tabs(["📈 Scanner", "⭐ Watchlist"])
+
 with tab1:
     if run:
         if extra:
@@ -290,18 +301,24 @@ with tab1:
                     st.success(f"Added {len(live)} live movers from FMP")
                 else:
                     st.warning("Could not fetch live movers, using default list")
+
             bar = st.progress(0, text="Scanning all stocks...")
             with ThreadPoolExecutor(max_workers=30) as executor:
                 all_data = list(executor.map(get_stock_data, tickers_to_scan))
             bar.empty()
+
             results = []
             for d in all_data:
                 if d:
-                    price_ok = float(min_price) <= d["price"] <= float(max_price)
+                    price_ok  = float(min_price) <= d["price"] <= float(max_price)
                     change_ok = float(min_change) <= d["chg"] <= float(max_change)
-                    vol_ok = d["vol_spike"] >= float(min_vol) if min_vol > 0 else True
-                    if price_ok and change_ok and vol_ok:
+                    # FIX — volume spike now uses direct multiplier with decimals
+                    vol_ok    = d["vol_spike"] >= float(min_vol_spike) if min_vol_spike > 0 else True
+                    # FIX — new minimum volume filter
+                    min_vol_ok = d["vol"] >= int(min_volume) if min_volume > 0 else True
+                    if price_ok and change_ok and vol_ok and min_vol_ok:
                         results.append(d)
+
             if results:
                 results = sorted(results, key=lambda x: x["chg"], reverse=True)
                 st.session_state.results = results
@@ -311,6 +328,7 @@ with tab1:
                 c2.metric("Passed", len(results))
                 c3.metric("Strong Buys", sum(1 for r in results if r["rating"]=="STRONG BUY"))
                 st.divider()
+
                 if st.button("Analyze Top 5 with AI"):
                     try:
                         akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
@@ -325,9 +343,11 @@ with tab1:
                                 msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=150, messages=[{"role":"user","content":prompt}])
                             st.markdown(f"**{r['ticker']}** - ${round(r['price'],2)} - {r['chg']}%")
                             st.info(msg.content[0].text)
+
                 st.divider()
                 show_only_strong = st.checkbox("Show only Strong Buy", value=False, key="filter_run2")
                 display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
+
                 @st.fragment
                 def render_results_list(results_list):
                     ai_cache = {}
@@ -351,7 +371,10 @@ with tab1:
                             pct_high_r = r.get("pct_from_high", "N/A")
                             candle_r = r.get("candle_quality", "N/A")
                             rsi_r = r.get("rsi", "N/A")
-                            st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r) + " | " + str(pct_high_r) + "% below 52W high | Candle close: " + str(candle_r) + "%")
+                            # Show volume info in caption
+                            vol_display = f"{r['vol']:,}" if r.get('vol') else "N/A"
+                            avg_vol_display = f"{r['avg_vol']:,}" if r.get('avg_vol') else "N/A"
+                            st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r) + " | " + str(pct_high_r) + "% below 52W high | Candle close: " + str(candle_r) + "% | Vol: " + vol_display + " | Avg Vol: " + avg_vol_display)
 
                             if auto_ai_strong and r["rating"]=="STRONG BUY" and r["ticker"] in ai_cache:
                                 cached_result = ai_cache[r["ticker"]]
@@ -386,11 +409,11 @@ with tab1:
                                     st.error("Could not add " + r["ticker"] + ": " + info)
 
                 render_results_list(display_results)
-
                 st.download_button("Download CSV", pd.DataFrame(results).to_csv(index=False).encode(), "results.csv")
 
             else:
                 st.warning("No stocks found. Try wider filters.")
+
     elif st.session_state.results:
         results = st.session_state.results
         tickers_to_scan = list(range(st.session_state.tickers_scanned))
@@ -399,6 +422,7 @@ with tab1:
         c2.metric("Passed", len(results))
         c3.metric("Strong Buys", sum(1 for r in results if r["rating"]=="STRONG BUY"))
         st.divider()
+
         if st.button("Analyze Top 5 with AI", key="analyze_saved"):
             try:
                 akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
@@ -413,9 +437,11 @@ with tab1:
                         msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=150, messages=[{"role":"user","content":prompt}])
                     st.markdown(f"**{r['ticker']}** - ${round(r['price'],2)} - {r['chg']}%")
                     st.info(msg.content[0].text)
+
         st.divider()
         show_only_strong = st.checkbox("Show only Strong Buy", value=False)
         display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
+
         for r in display_results:
             label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
             with st.expander(label, expanded=(auto_ai_strong and r["rating"]=="STRONG BUY")):
@@ -430,7 +456,9 @@ with tab1:
                 pct_high_r2 = r.get("pct_from_high", "N/A")
                 candle_r2 = r.get("candle_quality", "N/A")
                 rsi_r2 = r.get("rsi", "N/A")
-                st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r2) + " | " + str(pct_high_r2) + "% below 52W high | Candle close: " + str(candle_r2) + "%")
+                vol_display2 = f"{r['vol']:,}" if r.get('vol') else "N/A"
+                avg_vol_display2 = f"{r['avg_vol']:,}" if r.get('avg_vol') else "N/A"
+                st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r2) + " | " + str(pct_high_r2) + "% below 52W high | Candle close: " + str(candle_r2) + "% | Vol: " + vol_display2 + " | Avg Vol: " + avg_vol_display2)
 
                 if show_ai or (auto_ai_strong and r["rating"]=="STRONG BUY"):
                     import anthropic
@@ -484,7 +512,8 @@ with tab1:
             c5.metric("Target", f"${d['target']}")
             c6.metric("52W High", f"${d['high']}")
             c7.metric("52W Low", f"${d['low']}")
-            st.caption("Sector: " + d.get("sector","N/A") + " | RSI: " + str(d.get("rsi","N/A")))
+            vol_display3 = f"{d['vol']:,}" if d.get('vol') else "N/A"
+            st.caption("Sector: " + d.get("sector","N/A") + " | RSI: " + str(d.get("rsi","N/A")) + " | Vol: " + vol_display3)
 
             extra_col1, extra_col2 = st.columns(2)
             if extra_col1.button("+ Add to Watchlist", key="extra_add"):
@@ -568,7 +597,8 @@ with tab2:
                     rsi_display = d.get("rsi", "N/A")
                     pct_high_display = d.get("pct_from_high", "N/A")
                     candle_q_display = d.get("candle_quality", "N/A")
-                    st.caption("Sector: " + sector + " | RSI: " + str(rsi_display) + " | " + str(pct_high_display) + "% below 52W high | Candle close: " + str(candle_q_display) + "%")
+                    vol_display_w = f"{d['vol']:,}" if d.get('vol') else "N/A"
+                    st.caption("Sector: " + sector + " | RSI: " + str(rsi_display) + " | " + str(pct_high_display) + "% below 52W high | Candle close: " + str(candle_q_display) + "% | Vol: " + vol_display_w)
 
                     @st.dialog("AI Signal")
                     def show_ai_signal_dialog(tkr, prc, chng, rsi_v, vspike, rtng, tgt, em, pct_high=None, candle_q=None):
@@ -583,9 +613,9 @@ with tab2:
                                 client3 = anthropic.Anthropic(api_key=akey3)
                                 extra_context = ""
                                 if pct_high is not None:
-                                    extra_context += " Stock is " + str(pct_high) + "% below its 52-week high (0% means at the high)."
+                                    extra_context += " Stock is " + str(pct_high) + "% below its 52-week high."
                                 if candle_q is not None:
-                                    extra_context += " Today's candle closed at " + str(candle_q) + "% of its daily range (100% = closed at the high, strong; 0% = closed at the low, weak, long upper wick)."
+                                    extra_context += " Today's candle closed at " + str(candle_q) + "% of its daily range."
                                 news_headlines3 = get_stock_news(tkr)
                                 news_context3 = ""
                                 if news_headlines3:
@@ -605,7 +635,6 @@ with tab2:
                                 if "not financial advice" not in ai_text.lower():
                                     ai_text += "\n\n*This is an algorithmic estimate for research purposes only. Not financial advice.*"
                             st.info(ai_text)
-
                             if "SIGNAL: BUY" in ai_text or "SIGNAL: SELL" in ai_text:
                                 if em:
                                     signal_type = "BUY" if "SIGNAL: BUY" in ai_text else "SELL"
@@ -616,6 +645,7 @@ with tab2:
 
                     if st.button("Get AI Buy/Sell Signal", key="aisig_" + ticker):
                         show_ai_signal_dialog(ticker, price, chg, rsi_display, d.get("vol_spike","N/A"), rating, target, alert_email, d.get("pct_from_high"), d.get("candle_quality"))
+
                     if abs(chg) >= auto_threshold and alert_email:
                         alert_key = "auto_sent_" + ticker
                         if alert_key not in st.session_state:
@@ -629,6 +659,7 @@ with tab2:
                                 st.warning("Auto-alert failed: " + msg)
                         else:
                             st.info("Alert already sent for this move")
+
                     c7,c8 = st.columns(2)
                     if c7.button("Send Alert Now", key="alert_" + ticker):
                         if not alert_email:
