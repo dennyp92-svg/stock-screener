@@ -2,9 +2,7 @@ name: Stock Alert Monitor
 
 on:
   schedule:
-    # Every 5 minutes Monday to Friday
     - cron: '*/5 * * * 1-5'
-    # Daily summary 8:00am CT = 13:00 UTC
     - cron: '0 13 * * 1-5'
   workflow_dispatch:
 
@@ -23,7 +21,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests pytz
+          pip install requests pytz supabase python-dotenv
 
       - name: Run alert monitor
         env:
