@@ -35,6 +35,27 @@ try:
 except Exception:
     FMP_KEY = os.getenv("FMP_KEY")
 
+# ============================================================
+# NEW — Get earnings date from FMP
+# ============================================================
+def get_earnings_date(ticker):
+    try:
+        import requests
+        url = f"https://financialmodelingprep.com/stable/earnings-surprises/{ticker}?apikey={FMP_KEY}&limit=1"
+        r = requests.get(url, timeout=8).json()
+        if r and len(r) > 0:
+            from datetime import datetime, date
+            earn_date_str = r[0].get("date", None)
+            if earn_date_str:
+                earn_date = datetime.strptime(earn_date_str, "%Y-%m-%d").date()
+                today = date.today()
+                days_until = (earn_date - today).days
+                if 0 <= days_until <= 7:
+                    return days_until
+    except Exception:
+        pass
+    return None
+
 def analyze_one_stock(r):
     try:
         akey = st.secrets.get("ANTHROPIC_KEY", os.getenv("ANTHROPIC_KEY"))
@@ -230,12 +251,33 @@ def get_stock_data(ticker):
             pct_from_high = round(((week52_high - curr) / week52_high) * 100, 1) if week52_high > 0 else None
             today_high = float(hist["High"].iloc[-1])
             today_low = float(hist["Low"].iloc[-1])
+            today_open = float(hist["Open"].iloc[-1])
             candle_range = today_high - today_low
             if candle_range > 0:
                 candle_quality = round(((curr - today_low) / candle_range) * 100, 1)
             else:
                 candle_quality = 100
-            return {"ticker":ticker,"price":curr,"chg":chg,"rating":rating,"target":info.get("targetMeanPrice","N/A"),"vol_spike":vol_spike,"vol":vol,"avg_vol":avg_vol,"high":week52_high,"low":info.get("fiftyTwoWeekLow",0),"sector":info.get("sector","N/A"),"rsi":rsi_val,"pct_from_high":pct_from_high,"candle_quality":candle_quality}
+            # NEW — Gap up calculation
+            gap_pct = round(((today_open - prev) / prev) * 100, 2)
+            is_gap_up = gap_pct > 0
+            return {
+                "ticker": ticker,
+                "price": curr,
+                "chg": chg,
+                "rating": rating,
+                "target": info.get("targetMeanPrice","N/A"),
+                "vol_spike": vol_spike,
+                "vol": vol,
+                "avg_vol": avg_vol,
+                "high": week52_high,
+                "low": info.get("fiftyTwoWeekLow",0),
+                "sector": info.get("sector","N/A"),
+                "rsi": rsi_val,
+                "pct_from_high": pct_from_high,
+                "candle_quality": candle_quality,
+                "gap_pct": gap_pct,
+                "is_gap_up": is_gap_up
+            }
     except Exception: pass
     return None
 
@@ -255,22 +297,23 @@ st.caption("⚠️ For research and informational purposes only. Not financial a
 
 with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
     col1, col2, col3 = st.columns(3)
-
-    # FIX 1 — Min % Change now accepts decimals
-    min_change = col1.number_input("Min % Change", value=1.0, step=0.1, format="%.1f")
-
-    # FIX 2 — Max % Change now accepts decimals
-    max_change = col2.number_input("Max % Change", value=8.0, step=0.1, format="%.1f")
-
-    # FIX 3 — Volume Spike now accepts decimals and is direct multiplier
-    min_vol_spike = col3.number_input("Min Vol Spike (x)", value=1.5, step=0.1, format="%.1f", help="e.g. 1.5 means volume is 1.5x the average")
+    min_change    = col1.number_input("Min % Change",    value=1.0,  step=0.1, format="%.1f")
+    max_change    = col2.number_input("Max % Change",    value=8.0,  step=0.1, format="%.1f")
+    min_vol_spike = col3.number_input("Min Vol Spike (x)", value=1.5, step=0.1, format="%.1f", help="1.5 means volume is 1.5x average")
 
     col4, col5 = st.columns(2)
     min_price = col4.number_input("Min Price $", value=30)
     max_price = col5.number_input("Max Price $", value=500)
 
-    # FIX 4 — New minimum volume field
-    min_volume = st.number_input("Min Volume (shares)", value=1000000, step=100000, help="Minimum number of shares traded today. 1000000 = 1 million")
+    min_volume = st.number_input("Min Volume (shares)", value=1000000, step=100000, help="1000000 = 1 million shares minimum")
+
+    # NEW — RSI Filter
+    col_rsi1, col_rsi2 = st.columns(2)
+    min_rsi = col_rsi1.number_input("Min RSI", value=48.0, step=1.0, format="%.0f", help="Match SMCI 13 - minimum RSI 48")
+    max_rsi = col_rsi2.number_input("Max RSI", value=75.0, step=1.0, format="%.0f", help="Match SMCI 13 - maximum RSI 75")
+
+    # NEW — Gap Up Toggle
+    gap_up_only = st.toggle("🚀 Gap Up Stocks Only", value=False, help="Only show stocks that opened above yesterday's close")
 
     use_live = True
     show_ai = st.checkbox("Enable AI Analysis", value=False)
@@ -310,13 +353,15 @@ with tab1:
             results = []
             for d in all_data:
                 if d:
-                    price_ok  = float(min_price) <= d["price"] <= float(max_price)
-                    change_ok = float(min_change) <= d["chg"] <= float(max_change)
-                    # FIX — volume spike now uses direct multiplier with decimals
-                    vol_ok    = d["vol_spike"] >= float(min_vol_spike) if min_vol_spike > 0 else True
-                    # FIX — new minimum volume filter
-                    min_vol_ok = d["vol"] >= int(min_volume) if min_volume > 0 else True
-                    if price_ok and change_ok and vol_ok and min_vol_ok:
+                    price_ok    = float(min_price) <= d["price"] <= float(max_price)
+                    change_ok   = float(min_change) <= d["chg"] <= float(max_change)
+                    vol_ok      = d["vol_spike"] >= float(min_vol_spike) if min_vol_spike > 0 else True
+                    min_vol_ok  = d["vol"] >= int(min_volume) if min_volume > 0 else True
+                    # NEW — RSI filter
+                    rsi_ok      = (d["rsi"] is not None and float(min_rsi) <= d["rsi"] <= float(max_rsi)) if d["rsi"] is not None else True
+                    # NEW — Gap up filter
+                    gap_ok      = d["is_gap_up"] if gap_up_only else True
+                    if price_ok and change_ok and vol_ok and min_vol_ok and rsi_ok and gap_ok:
                         results.append(d)
 
             if results:
@@ -358,8 +403,18 @@ with tab1:
                                 ai_cache = get_ai_batch(strong_buy_list)
 
                     for r in results_list:
-                        label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
+                        # NEW — earnings warning label
+                        earnings_days = get_earnings_date(r["ticker"])
+                        earnings_warn = f" ⚠️ Earnings in {earnings_days} days" if earnings_days is not None else ""
+                        # NEW — gap up label
+                        gap_label = f" 🚀 Gap Up +{r['gap_pct']}%" if r.get("is_gap_up") and r.get("gap_pct", 0) > 0 else ""
+
+                        label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}{earnings_warn}{gap_label}"
                         with st.expander(label, expanded=(auto_ai_strong and r["rating"]=="STRONG BUY")):
+                            # Show earnings warning prominently if within 7 days
+                            if earnings_days is not None:
+                                st.warning(f"⚠️ Earnings in {earnings_days} days — trade with caution")
+
                             c1,c2,c3 = st.columns(3)
                             c1.metric("Price", f"${round(r['price'],2)}")
                             c2.metric("Change", f"{r['chg']}%")
@@ -369,12 +424,12 @@ with tab1:
                             c5.metric("52W High", f"${r['high']}")
                             c6.metric("52W Low", f"${r['low']}")
                             pct_high_r = r.get("pct_from_high", "N/A")
-                            candle_r = r.get("candle_quality", "N/A")
-                            rsi_r = r.get("rsi", "N/A")
-                            # Show volume info in caption
-                            vol_display = f"{r['vol']:,}" if r.get('vol') else "N/A"
+                            candle_r   = r.get("candle_quality", "N/A")
+                            rsi_r      = r.get("rsi", "N/A")
+                            vol_display     = f"{r['vol']:,}" if r.get('vol') else "N/A"
                             avg_vol_display = f"{r['avg_vol']:,}" if r.get('avg_vol') else "N/A"
-                            st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r) + " | " + str(pct_high_r) + "% below 52W high | Candle close: " + str(candle_r) + "% | Vol: " + vol_display + " | Avg Vol: " + avg_vol_display)
+                            gap_caption     = f" | Gap: +{r['gap_pct']}%" if r.get("is_gap_up") else ""
+                            st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r) + " | " + str(pct_high_r) + "% below 52W high | Candle close: " + str(candle_r) + "% | Vol: " + vol_display + " | Avg Vol: " + avg_vol_display + gap_caption)
 
                             if auto_ai_strong and r["rating"]=="STRONG BUY" and r["ticker"] in ai_cache:
                                 cached_result = ai_cache[r["ticker"]]
@@ -443,8 +498,14 @@ with tab1:
         display_results = [r for r in results if r["rating"]=="STRONG BUY"] if show_only_strong else results
 
         for r in display_results:
-            label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}"
+            earnings_days = get_earnings_date(r["ticker"])
+            earnings_warn = f" ⚠️ Earnings in {earnings_days} days" if earnings_days is not None else ""
+            gap_label = f" 🚀 Gap Up +{r['gap_pct']}%" if r.get("is_gap_up") and r.get("gap_pct", 0) > 0 else ""
+            label = f"{r['ticker']} - ${round(r['price'],2)} - {r['chg']}% - {r['rating']}{earnings_warn}{gap_label}"
             with st.expander(label, expanded=(auto_ai_strong and r["rating"]=="STRONG BUY")):
+                if earnings_days is not None:
+                    st.warning(f"⚠️ Earnings in {earnings_days} days — trade with caution")
+
                 c1,c2,c3 = st.columns(3)
                 c1.metric("Price", f"${round(r['price'],2)}")
                 c2.metric("Change", f"{r['chg']}%")
@@ -453,12 +514,13 @@ with tab1:
                 c4.metric("Target", f"${r['target']}")
                 c5.metric("52W High", f"${r['high']}")
                 c6.metric("52W Low", f"${r['low']}")
-                pct_high_r2 = r.get("pct_from_high", "N/A")
-                candle_r2 = r.get("candle_quality", "N/A")
-                rsi_r2 = r.get("rsi", "N/A")
-                vol_display2 = f"{r['vol']:,}" if r.get('vol') else "N/A"
+                pct_high_r2     = r.get("pct_from_high", "N/A")
+                candle_r2       = r.get("candle_quality", "N/A")
+                rsi_r2          = r.get("rsi", "N/A")
+                vol_display2    = f"{r['vol']:,}" if r.get('vol') else "N/A"
                 avg_vol_display2 = f"{r['avg_vol']:,}" if r.get('avg_vol') else "N/A"
-                st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r2) + " | " + str(pct_high_r2) + "% below 52W high | Candle close: " + str(candle_r2) + "% | Vol: " + vol_display2 + " | Avg Vol: " + avg_vol_display2)
+                gap_caption2    = f" | Gap: +{r['gap_pct']}%" if r.get("is_gap_up") else ""
+                st.caption("Sector: " + r.get("sector","N/A") + " | RSI: " + str(rsi_r2) + " | " + str(pct_high_r2) + "% below 52W high | Candle close: " + str(candle_r2) + "% | Vol: " + vol_display2 + " | Avg Vol: " + avg_vol_display2 + gap_caption2)
 
                 if show_ai or (auto_ai_strong and r["rating"]=="STRONG BUY"):
                     import anthropic
@@ -503,17 +565,21 @@ with tab1:
         if d:
             st.divider()
             st.success(f"Found {d['ticker']}")
+            earnings_days_m = get_earnings_date(d["ticker"])
+            if earnings_days_m is not None:
+                st.warning(f"⚠️ Earnings in {earnings_days_m} days — trade with caution")
             c1,c2,c3,c4 = st.columns(4)
-            c1.metric("Price", f"${round(d['price'],2)}")
-            c2.metric("Change", f"{d['chg']}%")
-            c3.metric("Rating", d["rating"])
+            c1.metric("Price",     f"${round(d['price'],2)}")
+            c2.metric("Change",    f"{d['chg']}%")
+            c3.metric("Rating",    d["rating"])
             c4.metric("Vol Spike", f"{d['vol_spike']}x")
             c5,c6,c7 = st.columns(3)
-            c5.metric("Target", f"${d['target']}")
+            c5.metric("Target",   f"${d['target']}")
             c6.metric("52W High", f"${d['high']}")
-            c7.metric("52W Low", f"${d['low']}")
+            c7.metric("52W Low",  f"${d['low']}")
             vol_display3 = f"{d['vol']:,}" if d.get('vol') else "N/A"
-            st.caption("Sector: " + d.get("sector","N/A") + " | RSI: " + str(d.get("rsi","N/A")) + " | Vol: " + vol_display3)
+            gap_caption3 = f" | Gap: +{d['gap_pct']}%" if d.get("is_gap_up") else ""
+            st.caption("Sector: " + d.get("sector","N/A") + " | RSI: " + str(d.get("rsi","N/A")) + " | Vol: " + vol_display3 + gap_caption3)
 
             extra_col1, extra_col2 = st.columns(2)
             if extra_col1.button("+ Add to Watchlist", key="extra_add"):
@@ -577,28 +643,34 @@ with tab2:
         for ticker in watchlist:
             d = get_stock_data(ticker)
             if d:
-                price = round(d["price"], 2)
-                chg = d["chg"]
-                rating = d["rating"]
-                target = d["target"]
-                high = d["high"]
-                low = d["low"]
-                sector = d["sector"]
-                label = ticker + " - $" + str(price) + " - " + str(chg) + "% - " + rating
+                price    = round(d["price"], 2)
+                chg      = d["chg"]
+                rating   = d["rating"]
+                target   = d["target"]
+                high     = d["high"]
+                low      = d["low"]
+                sector   = d["sector"]
+                earnings_days_w = get_earnings_date(ticker)
+                earnings_warn_w = f" ⚠️ Earnings in {earnings_days_w} days" if earnings_days_w is not None else ""
+                gap_label_w = f" 🚀 Gap Up +{d['gap_pct']}%" if d.get("is_gap_up") and d.get("gap_pct", 0) > 0 else ""
+                label = ticker + " - $" + str(price) + " - " + str(chg) + "% - " + rating + earnings_warn_w + gap_label_w
                 with st.expander(label):
+                    if earnings_days_w is not None:
+                        st.warning(f"⚠️ Earnings in {earnings_days_w} days — trade with caution")
                     c1,c2,c3 = st.columns(3)
-                    c1.metric("Price", "$" + str(price))
+                    c1.metric("Price",  "$" + str(price))
                     c2.metric("Change", str(chg) + "%")
                     c3.metric("Rating", rating)
                     c4,c5,c6 = st.columns(3)
-                    c4.metric("Target", "$" + str(target))
+                    c4.metric("Target",   "$" + str(target))
                     c5.metric("52W High", "$" + str(high))
-                    c6.metric("52W Low", "$" + str(low))
-                    rsi_display = d.get("rsi", "N/A")
+                    c6.metric("52W Low",  "$" + str(low))
+                    rsi_display      = d.get("rsi", "N/A")
                     pct_high_display = d.get("pct_from_high", "N/A")
                     candle_q_display = d.get("candle_quality", "N/A")
-                    vol_display_w = f"{d['vol']:,}" if d.get('vol') else "N/A"
-                    st.caption("Sector: " + sector + " | RSI: " + str(rsi_display) + " | " + str(pct_high_display) + "% below 52W high | Candle close: " + str(candle_q_display) + "% | Vol: " + vol_display_w)
+                    vol_display_w    = f"{d['vol']:,}" if d.get('vol') else "N/A"
+                    gap_caption_w    = f" | Gap: +{d['gap_pct']}%" if d.get("is_gap_up") else ""
+                    st.caption("Sector: " + sector + " | RSI: " + str(rsi_display) + " | " + str(pct_high_display) + "% below 52W high | Candle close: " + str(candle_q_display) + "% | Vol: " + vol_display_w + gap_caption_w)
 
                     @st.dialog("AI Signal")
                     def show_ai_signal_dialog(tkr, prc, chng, rsi_v, vspike, rtng, tgt, em, pct_high=None, candle_q=None):
