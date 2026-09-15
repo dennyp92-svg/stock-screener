@@ -15,18 +15,24 @@ ALERT_EMAIL        = os.getenv("GMAIL_ADDRESS")
 
 CHANGE_THRESHOLD   = 5.0
 VOL_SPIKE_MIN      = 1.5
-MARKET_OPEN_CT     = 8
-MARKET_OPEN_MIN    = 30
-MARKET_CLOSE_CT    = 14
-MARKET_CLOSE_MIN   = 45
+MAX_ALERTS_PER_DAY = 3
+
+def is_alert_window():
+    ct = pytz.timezone("America/Chicago")
+    now = datetime.now(ct)
+    if now.weekday() >= 5:
+        return False
+    open_time  = now.replace(hour=8,  minute=30, second=0)
+    close_time = now.replace(hour=10, minute=0,  second=0)
+    return open_time <= now <= close_time
 
 def is_market_open():
     ct = pytz.timezone("America/Chicago")
     now = datetime.now(ct)
     if now.weekday() >= 5:
         return False
-    open_time  = now.replace(hour=MARKET_OPEN_CT,  minute=MARKET_OPEN_MIN,  second=0)
-    close_time = now.replace(hour=MARKET_CLOSE_CT, minute=MARKET_CLOSE_MIN, second=0)
+    open_time  = now.replace(hour=8,  minute=30, second=0)
+    close_time = now.replace(hour=14, minute=45, second=0)
     return open_time <= now <= close_time
 
 def send_email(subject, body):
@@ -156,32 +162,50 @@ def send_daily_summary():
     subject = f"Morning Brief — {date_str}"
     send_email(subject, body)
 
-def check_and_alert(ticker, data, already_alerted):
+def check_and_alert(ticker, data, already_alerted, alerts_sent_today):
+    # Only alert during 8:30am to 10:00am CT
+    if not is_alert_window():
+        print(f"Outside alert window — skipping")
+        return already_alerted, alerts_sent_today
+
+    # Stop after 3 alerts for the day
+    if alerts_sent_today >= MAX_ALERTS_PER_DAY:
+        print(f"Max {MAX_ALERTS_PER_DAY} alerts reached for today — skipping")
+        return already_alerted, alerts_sent_today
+
     alerts = []
     if abs(data["change"]) >= CHANGE_THRESHOLD:
         direction = "UP" if data["change"] > 0 else "DOWN"
         alerts.append(f"📈 {ticker} moved {direction} {data['change']}%")
     if data["vol_spike"] >= VOL_SPIKE_MIN:
         alerts.append(f"🔊 {ticker} volume spike {data['vol_spike']}x average")
+
     if alerts:
-        alert_key = f"{ticker}_{datetime.now().strftime('%Y%m%d_%H')}"
+        # Once per day per stock
+        alert_key = f"{ticker}_{datetime.now().strftime('%Y%m%d')}"
         if alert_key not in already_alerted:
-            subject = f"Stock Alert - {ticker} ${data['price']}"
+            subject = f"Stock Alert {alerts_sent_today + 1} of {MAX_ALERTS_PER_DAY} - {ticker} ${data['price']}"
             body  = "\n".join(alerts)
             body += f"\n\nPrice:      ${data['price']}"
             body += f"\nChange:     {data['change']}%"
             body += f"\nVolume:     {data['volume']:,}"
             body += f"\nAvg Volume: {data['avg_volume']:,}"
             body += f"\nVol Spike:  {data['vol_spike']}x"
-            body += f"\n\nTime: {datetime.now().strftime('%I:%M %p')} CT"
+            body += f"\n\nAlert {alerts_sent_today + 1} of {MAX_ALERTS_PER_DAY} for today"
+            body += f"\nTime: {datetime.now().strftime('%I:%M %p')} CT"
             body += "\n\nFor research only. Not financial advice."
             send_email(subject, body)
             already_alerted.add(alert_key)
-    return already_alerted
+            alerts_sent_today += 1
+        else:
+            print(f"Alert already sent today for {ticker}")
+
+    return already_alerted, alerts_sent_today
 
 def main():
     print("Stock Alert Monitor started")
-    already_alerted = set()
+    already_alerted    = set()
+    alerts_sent_today  = 0
     ct    = pytz.timezone("America/Chicago")
     now   = datetime.now(ct)
     print(f"Current time: {now.strftime('%I:%M %p')} CT")
@@ -196,13 +220,15 @@ def main():
                 data = get_stock_data(ticker)
                 if data:
                     print(f"{ticker} — ${data['price']} — {data['change']}% — {data['vol_spike']}x vol")
-                    already_alerted = check_and_alert(ticker, data, already_alerted)
+                    already_alerted, alerts_sent_today = check_and_alert(
+                        ticker, data, already_alerted, alerts_sent_today
+                    )
                 time.sleep(1)
         else:
             print("Watchlist is empty")
     else:
         print(f"Market not open — time: {now.strftime('%I:%M %p')} CT")
-    print("Monitor run complete")
+    print(f"Monitor run complete — {alerts_sent_today} alerts sent today")
 
 if __name__ == "__main__":
     main()
