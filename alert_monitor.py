@@ -6,10 +6,6 @@ from email.mime.text import MIMEText
 from datetime import datetime
 import pytz
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
 SUPABASE_URL       = os.getenv("SUPABASE_URL")
 SUPABASE_KEY       = os.getenv("SUPABASE_KEY")
 FMP_KEY            = os.getenv("FMP_KEY")
@@ -23,10 +19,6 @@ MARKET_OPEN_CT     = 8
 MARKET_OPEN_MIN    = 30
 MARKET_CLOSE_CT    = 14
 MARKET_CLOSE_MIN   = 45
-
-# ============================================================
-# HELPERS
-# ============================================================
 
 def is_market_open():
     ct = pytz.timezone("America/Chicago")
@@ -166,14 +158,11 @@ def send_daily_summary():
 
 def check_and_alert(ticker, data, already_alerted):
     alerts = []
-
     if abs(data["change"]) >= CHANGE_THRESHOLD:
         direction = "UP" if data["change"] > 0 else "DOWN"
         alerts.append(f"📈 {ticker} moved {direction} {data['change']}%")
-
     if data["vol_spike"] >= VOL_SPIKE_MIN:
         alerts.append(f"🔊 {ticker} volume spike {data['vol_spike']}x average")
-
     if alerts:
         alert_key = f"{ticker}_{datetime.now().strftime('%Y%m%d_%H')}"
         if alert_key not in already_alerted:
@@ -188,29 +177,16 @@ def check_and_alert(ticker, data, already_alerted):
             body += "\n\nFor research only. Not financial advice."
             send_email(subject, body)
             already_alerted.add(alert_key)
-
     return already_alerted
-
-# ============================================================
-# MAIN
-# ============================================================
 
 def main():
     print("Stock Alert Monitor started")
     already_alerted = set()
-
     ct    = pytz.timezone("America/Chicago")
     now   = datetime.now(ct)
-    today = now.strftime("%Y%m%d")
-
     print(f"Current time: {now.strftime('%I:%M %p')} CT")
-
-    # Always send summary immediately when script starts
-    # GitHub Actions triggers this at 13:00 UTC = 8:00am CT
     print("Sending daily morning summary...")
     send_daily_summary()
-
-    # Check watchlist if market is open
     if is_market_open():
         print(f"Market open — checking watchlist")
         watchlist = get_watchlist()
@@ -225,8 +201,7 @@ def main():
         else:
             print("Watchlist is empty")
     else:
-        print(f"Market not open yet — time: {now.strftime('%I:%M %p')} CT")
-
+        print(f"Market not open — time: {now.strftime('%I:%M %p')} CT")
     print("Monitor run complete")
 
 if __name__ == "__main__":
