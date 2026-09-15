@@ -2,10 +2,10 @@ name: Stock Alert Monitor
 
 on:
   schedule:
-    # Runs every 5 minutes Monday to Friday
+    # Every 5 minutes Monday to Friday
     - cron: '*/5 * * * 1-5'
-    # Daily summary at 8:00am CT = 2:00pm UTC Monday to Friday
-    - cron: '0 14 * * 1-5'
+    # Daily summary 8:00am CT = 13:00 UTC (UTC-5 Central)
+    - cron: '0 13 * * 1-5'
   workflow_dispatch:
 
 jobs:
