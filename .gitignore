@@ -4,3 +4,5 @@ results.csv
 watchlist.json
 __pycache__/
 *.pyc
+auto_trade_state.json
+auto_trade_state.json.tmp
