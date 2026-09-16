@@ -95,7 +95,7 @@ cannot run live end-to-end on unverified data.
 | `WEBULL_APP_KEY` / `WEBULL_APP_SECRET` | OpenAPI credentials |
 | `WEBULL_ACCOUNT_ID` | the account to trade |
 | `WEBULL_REGION` | region, default `us` |
-| `WEBULL_API_ENDPOINT` | region API endpoint from Webull docs |
+| `WEBULL_API_ENDPOINT` | **optional** — leave unset; the SDK uses the default host for the region. Only set it (e.g. `api.webull.com`) if the connection fails without it. |
 | `WEBULL_ARM_LIVE_ORDERS` | must equal `YES` to allow real orders (default: disarmed) |
 
 ### Staged go-live checklist (do these in order)
@@ -118,6 +118,7 @@ cannot run live end-to-end on unverified data.
    export AUTO_TRADE_LIVE_CONFIRM=I_UNDERSTAND_THE_RISK
    export WEBULL_ARM_LIVE_ORDERS=YES
    ```
+   (`WEBULL_API_ENDPOINT` is optional — leave it unset unless the connection fails.)
    Place and then cancel one order by hand; confirm it appears in Webull.
 4. **Only then** consider letting the Engine place orders automatically — and
    even then, keep the position size, stop-loss, and daily-loss limits tight.
