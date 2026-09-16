@@ -4,6 +4,7 @@ import streamlit as st
 import os, json
 import smtplib
 from email.mime.text import MIMEText
+import auto_trader as at
 
 def send_email_alert(to_email, subject, body):
     try:
@@ -328,7 +329,7 @@ with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
 
     st.caption("Live market discovery enabled - real movers pulled fresh each scan")
 
-tab1, tab2 = st.tabs(["📈 Scanner", "⭐ Watchlist"])
+tab1, tab2, tab3 = st.tabs(["📈 Scanner", "⭐ Watchlist", "🤖 Auto-Trader"])
 
 with tab1:
     if run:
@@ -753,3 +754,91 @@ with tab2:
                 st.warning("Could not fetch data for " + ticker)
     else:
         st.info("Watchlist is empty")
+
+with tab3:
+    st.title("🤖 Auto-Trader (Paper)")
+    st.caption("⚠️ Monitors the SIMULATED paper portfolio only. No real money. "
+               "Not financial advice. Live trading is never triggered from this tab.")
+
+    at_cfg = at.Config()
+    paper_broker = at.PaperBroker(at_cfg)   # reads auto_trade_state.json (read-only unless a cycle is run)
+    at_state = paper_broker.state
+    at_positions = paper_broker.get_positions()
+    at_cash = paper_broker.get_cash()
+
+    # Current prices for held symbols (for equity + unrealized P&L)
+    price_map = {}
+    if at_positions:
+        with st.spinner("Fetching current prices..."):
+            for sym in list(at_positions.keys()):
+                d = at.get_stock_data(sym)
+                if d:
+                    price_map[sym] = d["price"]
+    at_equity = paper_broker.equity(price_map)
+    realized_total = round(sum((t.get("realized") or 0) for t in at_state.get("trades", [])), 2)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Mode", at_cfg.mode.upper())
+    m2.metric("Cash", f"${at_cash:,.2f}")
+    m3.metric("Equity", f"${at_equity:,.2f}")
+    m4.metric("Realized P&L", f"${realized_total:,.2f}")
+
+    st.divider()
+    st.subheader("Open positions")
+    if at_positions:
+        rows = []
+        for sym, pos in at_positions.items():
+            cur = price_map.get(sym)
+            avg = pos["avg_price"]
+            qty = pos["qty"]
+            rows.append({
+                "Ticker": sym, "Qty": qty, "Avg": avg,
+                "Price": cur if cur is not None else "N/A",
+                "Mkt Value": round(qty * cur, 2) if cur is not None else "N/A",
+                "Unreal P&L": round((cur - avg) * qty, 2) if cur is not None else "N/A",
+                "P&L %": round((cur / avg - 1) * 100, 2) if cur is not None and avg else "N/A",
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No open positions yet.")
+
+    st.subheader("Recent trades")
+    at_trades = at_state.get("trades", [])
+    if at_trades:
+        st.dataframe(pd.DataFrame(list(reversed(at_trades))[:25]),
+                     use_container_width=True, hide_index=True)
+    else:
+        st.caption("No trades yet.")
+
+    st.divider()
+    with st.expander("⚙️ Strategy settings (from environment / defaults)"):
+        st.write({
+            "position_size_pct": at_cfg.position_size_pct,
+            "max_positions": at_cfg.max_positions,
+            "stop_loss_pct": at_cfg.stop_loss_pct,
+            "take_profit_pct": at_cfg.take_profit_pct,
+            "daily_loss_limit_pct": at_cfg.daily_loss_limit_pct,
+            "change_band": [at_cfg.min_change_pct, at_cfg.max_change_pct],
+            "min_vol_spike": at_cfg.min_vol_spike,
+            "rsi_band": [at_cfg.min_rsi, at_cfg.max_rsi],
+            "universe_size": len(at_cfg.universe),
+        })
+
+    st.subheader("Run a paper cycle")
+    at_use_ai = st.checkbox("Use AI confirmation this run (calls Claude, uses tokens)", value=False)
+    st.caption(f"Scans {len(at_cfg.universe)} tickers, manages stop-loss/take-profit exits, "
+               "and opens new PAPER positions per the rules above. This can take a while.")
+    if st.button("▶️ Run one paper cycle now", use_container_width=True):
+        run_cfg = at.Config()
+        run_cfg.use_ai_confirmation = at_use_ai
+        run_broker = at.PaperBroker(run_cfg)   # paper only — the UI never places live orders
+        with st.spinner("Running paper cycle (scanning market)..."):
+            try:
+                at.Engine(run_cfg, run_broker).run_once()
+                st.success("Cycle complete.")
+            except Exception as e:
+                st.error(f"Cycle failed: {e}")
+        st.rerun()
+
+    st.caption("Paper state lives in auto_trade_state.json in the app's working directory. "
+               "A separate CLI/scheduled runner keeps its own copy unless it shares this filesystem.")
