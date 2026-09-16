@@ -104,11 +104,14 @@ cannot run live end-to-end on unverified data.
    ```bash
    python auto_trader.py --webull-test
    ```
-   Confirm it returns your account list and balance. Check that `get_cash()`
-   reads the right field from the balance response (see `_CASH_KEYS` in
-   `auto_trader.py`); adjust if your response uses a different field name.
-2. **Verify the positions response** and implement `WebullBroker.get_positions`
-   to match it (it deliberately raises until then).
+   Confirm it returns your account list and balance. `get_cash()` reads
+   `total_cash_balance` and `get_positions()` maps `symbol`/`quantity`/
+   `cost_price` — both verified against a real Individual-Margin response.
+   Set `WEBULL_ACCOUNT_ID` to your **stock** (Individual Margin) account,
+   not the futures account.
+2. ~~Verify the positions response~~ — done; `get_positions` is implemented.
+   Note: tiny fractional "dust" lots (e.g. 0.00002 shares) are returned as-is;
+   handle/close those manually — the engine isn't meant to trade fractional dust.
 3. **One manual test order** at the smallest possible size, armed explicitly:
    ```bash
    export AUTO_TRADE_MODE=live

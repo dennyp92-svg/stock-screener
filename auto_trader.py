@@ -93,8 +93,8 @@ def _supabase_creds():
 # Candidate keys for the account's available cash / buying power, most specific
 # first. Used to read the Webull balance response without hard-coding one
 # guessed field; if none match, the caller raises and asks for verification.
-_CASH_KEYS = ("cash_balance", "settled_funds", "available_funds",
-              "day_buying_power", "buying_power", "cash")
+_CASH_KEYS = ("total_cash_balance", "cash_balance", "settled_funds",
+              "available_funds", "day_buying_power", "buying_power", "cash")
 
 
 def _find_cash_field(obj):
@@ -520,14 +520,35 @@ class WebullBroker(Broker):
         return float(cash)
 
     def get_positions(self) -> dict:
-        # Intentionally not implemented from a guessed schema. Verifying the
-        # live positions response is a required manual step before the Engine
-        # is allowed to manage live positions. This keeps live auto-trading
-        # from running on unverified data.
-        raise NotImplementedError(
-            "Live positions are not wired yet. Verify the Webull positions "
-            "response first (see AUTO_TRADING.md, live checklist)."
-        )
+        """Map Webull equity positions to {symbol: {qty, avg_price}}.
+
+        Verified against a real account_v2.get_account_position response:
+        each item has symbol, quantity, cost_price, instrument_type.
+        """
+        res = self._client().account_v2.get_account_position(self.account_id)
+        body = res.json() if hasattr(res, "json") else res
+        items = body if isinstance(body, list) else None
+        if items is None and isinstance(body, dict):
+            for v in body.values():
+                if isinstance(v, list):
+                    items = v
+                    break
+        out = {}
+        for p in (items or []):
+            if not isinstance(p, dict):
+                continue
+            if p.get("instrument_type", "EQUITY") != "EQUITY":
+                continue
+            sym = p.get("symbol")
+            try:
+                qty = float(p.get("quantity", 0))
+                avg = float(p.get("cost_price", 0))
+            except (TypeError, ValueError):
+                continue
+            if not sym or qty <= 0:
+                continue
+            out[sym] = {"qty": qty, "avg_price": avg}
+        return out
 
     # ---- order placement (DISARMED by default) ----
     def _build_order(self, symbol: str, qty: int, price: float, side: str) -> dict:
