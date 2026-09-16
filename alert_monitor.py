@@ -1,71 +1,37 @@
-name: Stock Alert Monitor
+def main():
+    print("Stock Alert Monitor started")
+    already_alerted   = set()
+    alerts_sent_today = 0
+    ct  = pytz.timezone("America/Chicago")
+    now = datetime.now(ct)
+    print(f"Current time: {now.strftime('%I:%M %p')} CT")
 
-on:
-  schedule:
-    # Alert monitor every 5 minutes Monday to Friday
-    - cron: '*/5 * * * 1-5'
-    # Morning brief once at 8:00am CT = 13:00 UTC
-    - cron: '0 13 * * 1-5'
-  workflow_dispatch:
+    # Only send morning brief if explicitly triggered
+    send_brief = os.getenv("SEND_BRIEF", "true").lower() == "true"
+    if send_brief:
+        print("Sending daily morning summary...")
+        send_daily_summary()
 
-jobs:
-  morning_brief:
-    runs-on: ubuntu-latest
-    if: github.event.schedule == '0 13 * * 1-5'
+    # Check watchlist during alert window only
+    if is_alert_window():
+        print(f"Alert window open — checking watchlist")
+        watchlist = get_watchlist()
+        if watchlist:
+            print(f"Checking {len(watchlist)} stocks: {watchlist}")
+            for ticker in watchlist:
+                data = get_stock_data(ticker)
+                if data:
+                    print(f"{ticker} — ${data['price']} — {data['change']}% — {data['vol_spike']}x vol")
+                    already_alerted, alerts_sent_today = check_and_alert(
+                        ticker, data, already_alerted, alerts_sent_today
+                    )
+                time.sleep(1)
+        else:
+            print("Watchlist is empty")
+    else:
+        print(f"Outside alert window — time: {now.strftime('%I:%M %p')} CT")
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    print(f"Monitor run complete — {alerts_sent_today} alerts sent today")
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install requests pytz supabase python-dotenv
-
-      - name: Send morning brief
-        env:
-          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY:       ${{ secrets.SUPABASE_KEY }}
-          FMP_KEY:            ${{ secrets.FMP_KEY }}
-          GMAIL_ADDRESS:      ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-        run: |
-          timeout 120 python -c "
-          import os, sys
-          sys.path.insert(0, '.')
-          from alert_monitor import send_daily_summary
-          send_daily_summary()
-          print('Morning brief done')
-          "
-
-  monitor:
-    runs-on: ubuntu-latest
-    if: github.event.schedule == '*/5 * * * 1-5' || github.event_name == 'workflow_dispatch'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install requests pytz supabase python-dotenv
-
-      - name: Run alert monitor
-        env:
-          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY:       ${{ secrets.SUPABASE_KEY }}
-          FMP_KEY:            ${{ secrets.FMP_KEY }}
-          GMAIL_ADDRESS:      ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          SEND_BRIEF:         "false"
-        run: |
-          timeout 240 python alert_monitor.py || true
+if __name__ == "__main__":
+    main()
