@@ -43,6 +43,34 @@ Paper state persists in `auto_trade_state.json` (git-ignored).
 | `AUTO_TRADE_MIN_RSI` / `AUTO_TRADE_MAX_RSI` | `50` / `75` | entry RSI band |
 | `AUTO_TRADE_USE_AI` | `true` | require AI confirmation before buying |
 | `ANTHROPIC_KEY` | — | needed only if AI confirmation is on |
+| `AUTO_TRADE_STATE_BACKEND` | `auto` | `auto` (Supabase if creds set, else file), `supabase`, or `file` |
+| `AUTO_TRADE_STATE_TABLE` | `auto_trade_state` | Supabase table name for paper state |
+| `AUTO_TRADE_STATE_ID` | `paper` | row id within that table (use different ids for separate portfolios) |
+| `AUTO_TRADE_STATE_FILE` | `auto_trade_state.json` | file used when the backend is `file` |
+| `SUPABASE_URL` / `SUPABASE_KEY` | — | enable durable, shared Supabase state |
+
+## Durable paper state (Supabase)
+
+By default the engine stores the paper portfolio in a **local JSON file**. If
+`SUPABASE_URL` / `SUPABASE_KEY` are set (the same secrets the watchlist uses),
+it instead stores the whole portfolio as one JSON row in Supabase — so state
+**survives redeploys** and is **shared** between the Streamlit app and any
+CLI/scheduled runner.
+
+Create the table once in the Supabase SQL editor:
+
+```sql
+create table if not exists auto_trade_state (
+  id text primary key,
+  state jsonb not null default '{}'::jsonb,
+  updated_at timestamptz default now()
+);
+```
+
+If Row Level Security is enabled on the table, add policies that allow your
+anon key to `select` and `upsert` (insert/update) rows, or the app will show a
+clear error. Force a backend explicitly with `AUTO_TRADE_STATE_BACKEND=file`
+or `=supabase`.
 
 ## Live mode (Webull) — NOT enabled by default
 
