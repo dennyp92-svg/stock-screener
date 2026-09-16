@@ -761,7 +761,19 @@ with tab3:
                "Not financial advice. Live trading is never triggered from this tab.")
 
     at_cfg = at.Config()
-    paper_broker = at.PaperBroker(at_cfg)   # reads auto_trade_state.json (read-only unless a cycle is run)
+    _at_url, _at_key = at._supabase_creds()
+    _backend = "Supabase" if (_at_url and _at_key and at_cfg.state_backend != "file") else "local file"
+    st.caption(f"State backend: **{_backend}**")
+    try:
+        paper_broker = at.PaperBroker(at_cfg)   # Supabase or file, per config
+    except Exception as e:
+        st.error(f"Could not load paper state from {_backend}: {e}")
+        st.info("If using Supabase, create the table once:\n\n"
+                "```sql\ncreate table if not exists auto_trade_state (\n"
+                "  id text primary key,\n"
+                "  state jsonb not null default '{}'::jsonb,\n"
+                "  updated_at timestamptz default now()\n);\n```")
+        st.stop()
     at_state = paper_broker.state
     at_positions = paper_broker.get_positions()
     at_cash = paper_broker.get_cash()
@@ -831,14 +843,15 @@ with tab3:
     if st.button("▶️ Run one paper cycle now", use_container_width=True):
         run_cfg = at.Config()
         run_cfg.use_ai_confirmation = at_use_ai
-        run_broker = at.PaperBroker(run_cfg)   # paper only — the UI never places live orders
         with st.spinner("Running paper cycle (scanning market)..."):
             try:
+                run_broker = at.PaperBroker(run_cfg)   # paper only — the UI never places live orders
                 at.Engine(run_cfg, run_broker).run_once()
                 st.success("Cycle complete.")
             except Exception as e:
                 st.error(f"Cycle failed: {e}")
         st.rerun()
 
-    st.caption("Paper state lives in auto_trade_state.json in the app's working directory. "
-               "A separate CLI/scheduled runner keeps its own copy unless it shares this filesystem.")
+    st.caption("Paper state is stored in Supabase when SUPABASE_URL/SUPABASE_KEY are set "
+               "(shared with any CLI/scheduled runner and durable across redeploys); "
+               "otherwise it falls back to a local auto_trade_state.json file.")

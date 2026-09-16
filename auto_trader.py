@@ -65,6 +65,31 @@ def _env_bool(name: str, default: bool) -> bool:
     return val.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _secret(name: str):
+    """Read a secret from Streamlit secrets (if running under Streamlit) then
+    from the environment. Lets the same code work in the app and headless."""
+    try:
+        import streamlit as st
+        val = st.secrets.get(name, None)
+        if val is not None:
+            return val
+    except Exception:
+        pass
+    return os.getenv(name)
+
+
+def _supabase_creds():
+    """Return (url, key) with the same normalization the watchlist uses, or
+    (None, None) if not configured."""
+    url = (_secret("SUPABASE_URL") or "").strip().strip('"').strip("'").rstrip("/")
+    key = (_secret("SUPABASE_KEY") or "").strip()
+    if not url or not key:
+        return None, None
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+    return url, key
+
+
 DEFAULT_UNIVERSE = [
     "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD", "AVGO",
     "PLTR", "COIN", "MSTR", "SOFI", "HOOD", "SMCI", "ARM", "NFLX", "UBER",
@@ -99,6 +124,12 @@ class Config:
     universe: list = field(default_factory=lambda: list(DEFAULT_UNIVERSE))
 
     state_file: str = field(default_factory=lambda: os.getenv("AUTO_TRADE_STATE_FILE", "auto_trade_state.json"))
+
+    # State persistence backend: "auto" (Supabase if creds present, else file),
+    # "supabase", or "file".
+    state_backend: str = field(default_factory=lambda: os.getenv("AUTO_TRADE_STATE_BACKEND", "auto").strip().lower())
+    state_table: str = field(default_factory=lambda: os.getenv("AUTO_TRADE_STATE_TABLE", "auto_trade_state"))
+    state_row_id: str = field(default_factory=lambda: os.getenv("AUTO_TRADE_STATE_ID", "paper"))
 
     def validate(self):
         assert self.mode in ("paper", "live"), "mode must be 'paper' or 'live'"
@@ -218,6 +249,87 @@ def ai_confirm(d: dict, cfg: Config) -> str:
 
 
 # --------------------------------------------------------------------------
+# State persistence (paper portfolio)
+# --------------------------------------------------------------------------
+
+def _default_state(starting_cash: float) -> dict:
+    return {"cash": starting_cash, "positions": {}, "trades": [],
+            "day": None, "day_start_equity": None}
+
+
+class StateStore(ABC):
+    @abstractmethod
+    def load(self, default: dict) -> dict: ...
+
+    @abstractmethod
+    def save(self, state: dict) -> None: ...
+
+
+class FileStateStore(StateStore):
+    def __init__(self, path: str):
+        self.path = path
+
+    def load(self, default: dict) -> dict:
+        if os.path.exists(self.path):
+            try:
+                with open(self.path) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return default
+
+    def save(self, state: dict) -> None:
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, self.path)
+
+
+class SupabaseStateStore(StateStore):
+    """Stores the whole paper-state document as one JSONB row.
+
+    Table (create once in Supabase):
+        create table if not exists auto_trade_state (
+            id text primary key,
+            state jsonb not null default '{}'::jsonb,
+            updated_at timestamptz default now()
+        );
+    """
+
+    def __init__(self, url: str, key: str, table: str, row_id: str):
+        from supabase import create_client
+        self.sb = create_client(url, key)
+        self.table = table
+        self.row_id = row_id
+
+    def load(self, default: dict) -> dict:
+        res = self.sb.table(self.table).select("state").eq("id", self.row_id).execute()
+        if res.data:
+            return res.data[0]["state"]
+        # First run: seed the row with the default state.
+        self.sb.table(self.table).upsert({"id": self.row_id, "state": default}).execute()
+        return default
+
+    def save(self, state: dict) -> None:
+        self.sb.table(self.table).upsert({"id": self.row_id, "state": state}).execute()
+
+
+def build_state_store(cfg: Config) -> StateStore:
+    backend = cfg.state_backend
+    if backend == "file":
+        return FileStateStore(cfg.state_file)
+    url, key = _supabase_creds()
+    if url and key:
+        return SupabaseStateStore(url, key, cfg.state_table, cfg.state_row_id)
+    if backend == "supabase":
+        raise RuntimeError(
+            "AUTO_TRADE_STATE_BACKEND=supabase but SUPABASE_URL/SUPABASE_KEY "
+            "are not set."
+        )
+    return FileStateStore(cfg.state_file)  # backend == "auto", no creds
+
+
+# --------------------------------------------------------------------------
 # Broker abstraction
 # --------------------------------------------------------------------------
 
@@ -243,27 +355,14 @@ class Broker(ABC):
 
 
 class PaperBroker(Broker):
-    """Fully-simulated broker. Persists state to a JSON file."""
+    """Fully-simulated broker. Persists state via a StateStore (Supabase or file)."""
 
-    def __init__(self, cfg: Config):
-        self.state_file = cfg.state_file
-        self.state = self._load(cfg.starting_cash)
-
-    def _load(self, starting_cash: float) -> dict:
-        if os.path.exists(self.state_file):
-            try:
-                with open(self.state_file) as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {"cash": starting_cash, "positions": {}, "trades": [],
-                "day": None, "day_start_equity": None}
+    def __init__(self, cfg: Config, store: Optional[StateStore] = None):
+        self.store = store or build_state_store(cfg)
+        self.state = self.store.load(_default_state(cfg.starting_cash))
 
     def _save(self):
-        tmp = self.state_file + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(self.state, f, indent=2)
-        os.replace(tmp, self.state_file)
+        self.store.save(self.state)
 
     def get_cash(self) -> float:
         return round(self.state["cash"], 2)
