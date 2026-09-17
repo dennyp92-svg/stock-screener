@@ -314,6 +314,40 @@ def ai_confirm(d: dict, cfg: Config) -> str:
         return "SKIP"
 
 
+def ai_postmortem(record: dict) -> Optional[str]:
+    """One-sentence 'why it won/lost + a lesson' for a closed trade.
+
+    Runs whenever an ANTHROPIC_KEY is available (independent of the entry-side
+    AI confirmation flag). Returns None if unavailable. This does NOT change the
+    strategy on its own — it's a journal note for a human to learn from.
+    """
+    akey = os.getenv("ANTHROPIC_KEY") or os.getenv("ANTHROPIC_API_KEY")
+    if not akey:
+        return None
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=akey)
+        outcome = "made a PROFIT" if record.get("pnl", 0) >= 0 else "took a LOSS"
+        meta = record.get("entry_meta", {}) or {}
+        prompt = (
+            "A short-term paper momentum trade just closed. "
+            f"Symbol {record.get('symbol')}: bought at ${record.get('entry_price')}, "
+            f"sold at ${record.get('exit_price')} ({record.get('exit_reason')}), "
+            f"P&L ${record.get('pnl')} ({record.get('pnl_pct')}%). "
+            f"Entry conditions were: change {meta.get('chg')}%, RSI {meta.get('rsi')}, "
+            f"volume spike {meta.get('vol_spike')}x. "
+            f"In ONE plain sentence, say why this trade {outcome} and one lesson for "
+            "next time. Research only, not financial advice."
+        )
+        msg = client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=100,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return (msg.content[0].text or "").strip() or None
+    except Exception:
+        return None
+
+
 # --------------------------------------------------------------------------
 # State persistence (paper portfolio)
 # --------------------------------------------------------------------------
@@ -407,10 +441,10 @@ class Broker(ABC):
     def get_positions(self) -> dict: ...
 
     @abstractmethod
-    def buy(self, symbol: str, qty: int, price: float) -> dict: ...
+    def buy(self, symbol: str, qty: int, price: float, entry_meta: dict = None) -> dict: ...
 
     @abstractmethod
-    def sell(self, symbol: str, qty: int, price: float) -> dict: ...
+    def sell(self, symbol: str, qty: int, price: float, exit_reason: str = None) -> dict: ...
 
     def equity(self, price_lookup: dict) -> float:
         total = self.get_cash()
@@ -436,7 +470,7 @@ class PaperBroker(Broker):
     def get_positions(self) -> dict:
         return self.state["positions"]
 
-    def buy(self, symbol: str, qty: int, price: float) -> dict:
+    def buy(self, symbol: str, qty: int, price: float, entry_meta: dict = None) -> dict:
         cost = qty * price
         if qty <= 0:
             return {"ok": False, "reason": "qty<=0"}
@@ -449,25 +483,43 @@ class PaperBroker(Broker):
             pos["avg_price"] = round((pos["avg_price"] * pos["qty"] + cost) / new_qty, 4)
             pos["qty"] = new_qty
         else:
-            self.state["positions"][symbol] = {"qty": qty, "avg_price": round(price, 4)}
+            self.state["positions"][symbol] = {
+                "qty": qty, "avg_price": round(price, 4),
+                "entry_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "entry_meta": entry_meta or {},
+            }
         self._log("BUY", symbol, qty, price)
         self._save()
         return {"ok": True, "symbol": symbol, "qty": qty, "price": price}
 
-    def sell(self, symbol: str, qty: int, price: float) -> dict:
+    def sell(self, symbol: str, qty: int, price: float, exit_reason: str = None) -> dict:
         pos = self.state["positions"].get(symbol)
         if not pos or pos["qty"] < qty or qty <= 0:
             return {"ok": False, "reason": "no/short position"}
         proceeds = qty * price
-        realized = round((price - pos["avg_price"]) * qty, 2)
+        avg = pos["avg_price"]
+        realized = round((price - avg) * qty, 2)
+        pnl_pct = round((price / avg - 1) * 100, 2) if avg else 0.0
         self.state["cash"] += proceeds
         pos["qty"] -= qty
+        closed_record = None
         if pos["qty"] == 0:
+            closed_record = {
+                "symbol": symbol, "qty": qty,
+                "entry_price": avg, "entry_ts": pos.get("entry_ts"),
+                "entry_meta": pos.get("entry_meta", {}),
+                "exit_price": round(price, 4),
+                "exit_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "exit_reason": exit_reason, "pnl": realized, "pnl_pct": pnl_pct,
+                "lesson": None,
+            }
+            self.state.setdefault("journal", []).append(closed_record)
             del self.state["positions"][symbol]
         self._log("SELL", symbol, qty, price, realized)
         self._save()
         return {"ok": True, "symbol": symbol, "qty": qty, "price": price,
-                "realized": realized}
+                "realized": realized, "pnl_pct": pnl_pct,
+                "closed_record": closed_record}
 
     def _log(self, side, symbol, qty, price, realized=None):
         self.state["trades"].append({
@@ -614,11 +666,11 @@ class WebullBroker(Broker):
         return {"ok": ok, "symbol": symbol, "qty": qty, "price": price,
                 "side": side, "response": body}
 
-    def buy(self, symbol: str, qty: int, price: float) -> dict:
-        return self._place(symbol, qty, price, "BUY")
+    def buy(self, symbol: str, qty: int, price: float, entry_meta: dict = None) -> dict:
+        return self._place(symbol, qty, price, "BUY")  # entry_meta unused live
 
-    def sell(self, symbol: str, qty: int, price: float) -> dict:
-        return self._place(symbol, qty, price, "SELL")
+    def sell(self, symbol: str, qty: int, price: float, exit_reason: str = None) -> dict:
+        return self._place(symbol, qty, price, "SELL")  # exit_reason unused live
 
 
 # --------------------------------------------------------------------------
@@ -634,7 +686,8 @@ class Engine:
         return {t: d["price"] for t, d in snapshots.items() if d}
 
     def _manage_open_positions(self, snapshots: dict):
-        """Close positions that hit their stop-loss or take-profit."""
+        """Close positions that hit their stop-loss or take-profit, and write a
+        journal post-mortem for each closed trade."""
         for symbol, pos in list(self.broker.get_positions().items()):
             d = snapshots.get(symbol)
             if not d:
@@ -643,12 +696,22 @@ class Engine:
             avg = pos["avg_price"]
             stop = avg * (1 - self.cfg.stop_loss_pct)
             target = avg * (1 + self.cfg.take_profit_pct)
+            reason = None
             if price <= stop:
-                r = self.broker.sell(symbol, pos["qty"], price)
-                print(f"  STOP-LOSS  {symbol} @ {price} (avg {avg}) -> {r}")
+                reason = "STOP-LOSS"
             elif price >= target:
-                r = self.broker.sell(symbol, pos["qty"], price)
-                print(f"  TAKE-PROFIT {symbol} @ {price} (avg {avg}) -> {r}")
+                reason = "TAKE-PROFIT"
+            if reason:
+                r = self.broker.sell(symbol, pos["qty"], price, exit_reason=reason)
+                print(f"  {reason} {symbol} @ {price} (avg {avg}) "
+                      f"P&L ${r.get('realized')} ({r.get('pnl_pct')}%)")
+                rec = r.get("closed_record")
+                if rec is not None:
+                    lesson = ai_postmortem(rec)   # journal note only; no auto-tuning
+                    if lesson:
+                        rec["lesson"] = lesson
+                        self.broker._save()
+                        print(f"    lesson: {lesson}")
 
     def _day_start_equity(self, today: str, equity_now: float) -> float:
         """Return (and persist) the equity at the start of `today`.
@@ -749,7 +812,9 @@ class Engine:
                     continue
                 if qty * d["price"] > self.broker.get_cash():
                     continue
-                r = self.broker.buy(d["ticker"], qty, d["price"])
+                entry_meta = {"chg": d.get("chg"), "rsi": d.get("rsi"),
+                              "vol_spike": d.get("vol_spike")}
+                r = self.broker.buy(d["ticker"], qty, d["price"], entry_meta=entry_meta)
                 print(f"  BUY {d['ticker']} x{qty} @ {d['price']} -> {r}")
                 if r.get("ok"):
                     slots -= 1
