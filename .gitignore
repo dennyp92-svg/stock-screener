@@ -6,3 +6,4 @@ __pycache__/
 *.pyc
 auto_trade_state.json
 auto_trade_state.json.tmp
+.webull_app_key

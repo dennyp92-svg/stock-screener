@@ -66,16 +66,29 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _secret(name: str):
-    """Read a secret from Streamlit secrets (if running under Streamlit) then
-    from the environment. Lets the same code work in the app and headless."""
+    """Read a secret from Streamlit secrets, then the environment, then a plain
+    sidecar file (e.g. .webull_app_key) next to this module. The sidecar is a
+    last-resort store for values whose characters break .env parsing (a leading
+    '#'/'$' or an embedded quote). Works both in the app and headless."""
     try:
         import streamlit as st
         val = st.secrets.get(name, None)
-        if val is not None:
+        if val:
             return val
     except Exception:
         pass
-    return os.getenv(name)
+    val = os.getenv(name)
+    if val:
+        return val
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "." + name.lower())) as f:
+            data = f.read().strip()
+            if data:
+                return data
+    except Exception:
+        pass
+    return val
 
 
 def _supabase_creds():
