@@ -6,8 +6,24 @@
    price crosses the ATR band. Includes the "change ATR method" toggle (Wilder RMA vs. SMA of True Range).
 2. **Hull Moving Average** (nested-WMA smoother, in the style popularized by *InSilico*) — used as an optional
    slope filter so entries only fire when the Hull MA agrees with the Supertrend direction.
-3. **Risk management** — percent-of-equity position sizing, choice of stop method (ATR / Percent / Supertrend
-   line), R-multiple take-profit, and an optional ATR trailing stop.
+3. **Risk management + profit taking** — percent-of-equity position sizing, choice of stop method
+   (ATR / Percent / Supertrend line), and two profit modes:
+   - **Single R-multiple** — one take-profit at `R x stop distance`.
+   - **Staged TP1/TP2/TP3** (default) — scale out a configurable % of the position at three increasing
+     R-multiple targets. The final leg closes the remainder, or rides an ATR trailing stop if enabled.
+   - Optional **move-to-break-even**: once TP1 fills, the stop is pulled to the entry price so the trade
+     can no longer become a loss (the stop line turns blue on the chart when this is active).
+
+### Profit-taking defaults
+
+| Level | R multiple | % of position closed |
+|-------|-----------|----------------------|
+| TP1   | 1.0R      | 40%                  |
+| TP2   | 2.0R      | 30%                  |
+| TP3   | 3.0R      | remaining 30%        |
+
+Scale-out sizes are computed as absolute quantities relative to the **original** position size, so TP2's
+30% is 30% of the entry size — not 30% of whatever is left after TP1.
 
 ## How to use
 

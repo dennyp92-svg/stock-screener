@@ -51,10 +51,21 @@ stopType   = input.string("ATR", "Stop-loss type", options = ["ATR", "Percent", 
 stopAtrLen = input.int(14,       "Stop ATR Length",  minval = 1,               group = grpRisk)
 stopAtrMult= input.float(2.0,    "Stop ATR Multiplier", minval = 0.1, step = 0.1, group = grpRisk)
 stopPct    = input.float(3.0,    "Stop Percent (%)", minval = 0.1, step = 0.1, group = grpRisk)
-rrRatio    = input.float(2.0,    "Take-profit R multiple", minval = 0.0, step = 0.1, group = grpRisk,
-     tooltip = "Take-profit distance = R multiple x stop distance. Set 0 to disable the fixed take-profit.")
-useTrail   = input.bool(false,   "Use trailing stop (ATR)", group = grpRisk)
+useTrail   = input.bool(false,   "Trail the final leg (ATR)", group = grpRisk,
+     tooltip = "When ON, the last remaining leg rides an ATR trailing stop instead of a fixed target.")
 trailAtrMult = input.float(2.5,  "Trailing ATR Multiplier", minval = 0.1, step = 0.1, group = grpRisk)
+
+grpProfit = "Profit Taking / Targets"
+profitMode = input.string("Staged TP1/TP2/TP3", "Profit mode",
+     options = ["Single R-multiple", "Staged TP1/TP2/TP3"], group = grpProfit)
+rrRatio    = input.float(2.0,    "Single-mode take-profit R multiple", minval = 0.0, step = 0.1, group = grpProfit,
+     tooltip = "Used only in 'Single R-multiple' mode. Target distance = R x stop distance. 0 disables it.")
+tp1R       = input.float(1.0,    "TP1 — R multiple", minval = 0.1, step = 0.1, group = grpProfit)
+tp1Pct     = input.float(40.0,   "TP1 — % of position to close", minval = 0.0, maxval = 100, step = 5, group = grpProfit)
+tp2R       = input.float(2.0,    "TP2 — R multiple", minval = 0.1, step = 0.1, group = grpProfit)
+tp2Pct     = input.float(30.0,   "TP2 — % of position to close", minval = 0.0, maxval = 100, step = 5, group = grpProfit)
+tp3R       = input.float(3.0,    "TP3 — R multiple (closes remainder)", minval = 0.1, step = 0.1, group = grpProfit)
+moveBE     = input.bool(true,    "Move stop to break-even after TP1 fills", group = grpProfit)
 
 // -------------------------------------------------------------------------------------------------------------
 // 1) SUPERTREND
@@ -140,48 +151,117 @@ if allowShort and shortSignal
     qty = na(shortQty) ? na : shortQty
     strategy.entry("Short", strategy.short, qty = qty)
 
-// Freeze the stop/target at the entry bar so they do not drift with later ATR readings.
-var float longStopPrice   = na
-var float longTargetPrice = na
-var float shortStopPrice  = na
-var float shortTargetPrice= na
+// Freeze the stop distance, entry price, initial size and all target prices at the entry bar so they
+// do not drift with later ATR readings. R = the frozen stop distance (1R risk).
+var float longEntryPx   = na
+var float longStopPrice = na
+var float longR         = na
+var float longInitSize  = na
+var float longTP1       = na
+var float longTP2       = na
+var float longTP3       = na
+var float longSingleTP  = na
+
+var float shortEntryPx   = na
+var float shortStopPrice = na
+var float shortR         = na
+var float shortInitSize  = na
+var float shortTP1       = na
+var float shortTP2       = na
+var float shortTP3       = na
+var float shortSingleTP  = na
 
 if strategy.position_size > 0 and strategy.position_size[1] <= 0
     // just went long
-    longStopPrice   := strategy.position_avg_price - longStopDist
-    longTargetPrice := rrRatio > 0 ? strategy.position_avg_price + rrRatio * longStopDist : na
+    longEntryPx   := strategy.position_avg_price
+    longR         := longStopDist
+    longStopPrice := longEntryPx - longR
+    longInitSize  := strategy.position_size
+    longTP1       := longEntryPx + tp1R * longR
+    longTP2       := longEntryPx + tp2R * longR
+    longTP3       := longEntryPx + tp3R * longR
+    longSingleTP  := rrRatio > 0 ? longEntryPx + rrRatio * longR : na
 
 if strategy.position_size < 0 and strategy.position_size[1] >= 0
     // just went short
-    shortStopPrice   := strategy.position_avg_price + shortStopDist
-    shortTargetPrice := rrRatio > 0 ? strategy.position_avg_price - rrRatio * shortStopDist : na
+    shortEntryPx   := strategy.position_avg_price
+    shortR         := shortStopDist
+    shortStopPrice := shortEntryPx + shortR
+    shortInitSize  := math.abs(strategy.position_size)
+    shortTP1       := shortEntryPx - tp1R * shortR
+    shortTP2       := shortEntryPx - tp2R * shortR
+    shortTP3       := shortEntryPx - tp3R * shortR
+    shortSingleTP  := rrRatio > 0 ? shortEntryPx - rrRatio * shortR : na
 
-// Exits
+// Break-even: once the position has been partially closed (TP1 filled), pull the stop to entry.
+longBE  = moveBE and strategy.position_size > 0 and strategy.position_size < longInitSize  * 0.999
+shortBE = moveBE and strategy.position_size < 0 and math.abs(strategy.position_size) < shortInitSize * 0.999
+
+longStopEff  = longBE  ? longEntryPx  : longStopPrice
+shortStopEff = shortBE ? shortEntryPx : shortStopPrice
+
+// Scale-out sizes as ABSOLUTE quantities (percent of the ORIGINAL position), so TP2's size is not
+// re-interpreted as a percent of whatever is left after TP1.
+longTP1Qty  = longInitSize  * tp1Pct / 100
+longTP2Qty  = longInitSize  * tp2Pct / 100
+shortTP1Qty = shortInitSize * tp1Pct / 100
+shortTP2Qty = shortInitSize * tp2Pct / 100
+
+// ---- Exits ----
 if strategy.position_size > 0
-    if useTrail
-        strategy.exit("Long Exit", from_entry = "Long",
-             limit  = longTargetPrice,
-             trail_price  = close,
-             trail_offset = trailAtrMult * stopAtr / syminfo.mintick)
+    if profitMode == "Staged TP1/TP2/TP3"
+        if tp1Pct > 0
+            strategy.exit("L-TP1", from_entry = "Long", qty = longTP1Qty, limit = longTP1, stop = longStopEff)
+        if tp2Pct > 0
+            strategy.exit("L-TP2", from_entry = "Long", qty = longTP2Qty, limit = longTP2, stop = longStopEff)
+        if useTrail
+            strategy.exit("L-TP3", from_entry = "Long", stop = longStopEff,
+                 trail_price = close, trail_offset = trailAtrMult * stopAtr / syminfo.mintick)
+        else
+            strategy.exit("L-TP3", from_entry = "Long", limit = longTP3, stop = longStopEff)
     else
-        strategy.exit("Long Exit", from_entry = "Long", stop = longStopPrice, limit = longTargetPrice)
+        if useTrail
+            strategy.exit("Long Exit", from_entry = "Long", limit = longSingleTP, stop = longStopEff,
+                 trail_price = close, trail_offset = trailAtrMult * stopAtr / syminfo.mintick)
+        else
+            strategy.exit("Long Exit", from_entry = "Long", stop = longStopEff, limit = longSingleTP)
 
 if strategy.position_size < 0
-    if useTrail
-        strategy.exit("Short Exit", from_entry = "Short",
-             limit  = shortTargetPrice,
-             trail_price  = close,
-             trail_offset = trailAtrMult * stopAtr / syminfo.mintick)
+    if profitMode == "Staged TP1/TP2/TP3"
+        if tp1Pct > 0
+            strategy.exit("S-TP1", from_entry = "Short", qty = shortTP1Qty, limit = shortTP1, stop = shortStopEff)
+        if tp2Pct > 0
+            strategy.exit("S-TP2", from_entry = "Short", qty = shortTP2Qty, limit = shortTP2, stop = shortStopEff)
+        if useTrail
+            strategy.exit("S-TP3", from_entry = "Short", stop = shortStopEff,
+                 trail_price = close, trail_offset = trailAtrMult * stopAtr / syminfo.mintick)
+        else
+            strategy.exit("S-TP3", from_entry = "Short", limit = shortTP3, stop = shortStopEff)
     else
-        strategy.exit("Short Exit", from_entry = "Short", stop = shortStopPrice, limit = shortTargetPrice)
+        if useTrail
+            strategy.exit("Short Exit", from_entry = "Short", limit = shortSingleTP, stop = shortStopEff,
+                 trail_price = close, trail_offset = trailAtrMult * stopAtr / syminfo.mintick)
+        else
+            strategy.exit("Short Exit", from_entry = "Short", stop = shortStopEff, limit = shortSingleTP)
 
 // -------------------------------------------------------------------------------------------------------------
 // 6) VISUALS
 // -------------------------------------------------------------------------------------------------------------
-plot(strategy.position_size > 0 ? longStopPrice   : na, "Long Stop",    color = color.new(color.red,   40), style = plot.style_linebr)
-plot(strategy.position_size > 0 ? longTargetPrice : na, "Long Target",  color = color.new(color.green, 40), style = plot.style_linebr)
-plot(strategy.position_size < 0 ? shortStopPrice  : na, "Short Stop",   color = color.new(color.red,   40), style = plot.style_linebr)
-plot(strategy.position_size < 0 ? shortTargetPrice: na, "Short Target", color = color.new(color.green, 40), style = plot.style_linebr)
+staged = profitMode == "Staged TP1/TP2/TP3"
+
+plot(strategy.position_size > 0 ? longStopEff  : na, "Long Stop",  color = color.new(longBE  ? color.blue : color.red, 20), style = plot.style_linebr, linewidth = 2)
+plot(strategy.position_size < 0 ? shortStopEff : na, "Short Stop", color = color.new(shortBE ? color.blue : color.red, 20), style = plot.style_linebr, linewidth = 2)
+
+// Long targets
+plot(strategy.position_size > 0 and staged        ? longTP1      : na, "Long TP1",    color = color.new(color.green, 55), style = plot.style_linebr)
+plot(strategy.position_size > 0 and staged        ? longTP2      : na, "Long TP2",    color = color.new(color.green, 35), style = plot.style_linebr)
+plot(strategy.position_size > 0 and staged and not useTrail ? longTP3 : na, "Long TP3", color = color.new(color.green, 10), style = plot.style_linebr)
+plot(strategy.position_size > 0 and not staged    ? longSingleTP : na, "Long Target", color = color.new(color.green, 20), style = plot.style_linebr)
+// Short targets
+plot(strategy.position_size < 0 and staged        ? shortTP1      : na, "Short TP1",   color = color.new(color.green, 55), style = plot.style_linebr)
+plot(strategy.position_size < 0 and staged        ? shortTP2      : na, "Short TP2",   color = color.new(color.green, 35), style = plot.style_linebr)
+plot(strategy.position_size < 0 and staged and not useTrail ? shortTP3 : na, "Short TP3", color = color.new(color.green, 10), style = plot.style_linebr)
+plot(strategy.position_size < 0 and not staged    ? shortSingleTP : na, "Short Target", color = color.new(color.green, 20), style = plot.style_linebr)
 
 plotshape(allowLong  and longSignal,  "Long Entry",  style = shape.triangleup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small)
 plotshape(allowShort and shortSignal, "Short Entry", style = shape.triangledown, location = location.abovebar, color = color.new(color.red,   0), size = size.small)
