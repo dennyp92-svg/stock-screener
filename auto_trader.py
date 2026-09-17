@@ -779,6 +779,15 @@ def main():
     ap.add_argument("--webull-test", action="store_true",
                     help="READ-ONLY: verify Webull credentials (account list "
                          "+ balance). Places no orders.")
+    ap.add_argument("--webull-test-order", action="store_true",
+                    help="Place ONE small limit order (you confirm with YES). "
+                         "Priced not to fill; cancel it in the Webull app.")
+    ap.add_argument("--symbol", default="AXTX", help="test-order ticker")
+    ap.add_argument("--side", default="BUY", choices=["BUY", "SELL"])
+    ap.add_argument("--qty", default="1", help="test-order share quantity")
+    ap.add_argument("--price", default="1.00",
+                    help="test-order LIMIT price (default $1.00 — a BUY here "
+                         "sits unfilled on a higher-priced stock)")
     args = ap.parse_args()
 
     if args.webull_test:
@@ -794,6 +803,31 @@ def main():
             print("account_balance:", json.dumps(wb.get_account_balance_raw(), indent=2, default=str))
         except Exception as e:
             print("Webull test FAILED:", e)
+        return
+
+    if args.webull_test_order:
+        qty = int(float(args.qty))
+        price = float(args.price)
+        print("=== LIVE Webull test order ===")
+        print(f"  {args.side} {qty} share(s) of {args.symbol} as a LIMIT at ${price:.2f}")
+        print("  This is a REAL order on your Webull account. It is priced so it")
+        print("  should NOT fill; you will cancel it in the Webull app afterward.")
+        confirm = input("Type YES (capitals) to place this real order: ").strip()
+        if confirm != "YES":
+            print("Cancelled — no order placed.")
+            return
+        os.environ["WEBULL_ARM_LIVE_ORDERS"] = "YES"  # armed only after explicit YES
+        wb = WebullBroker(Config())
+        try:
+            if args.side.upper() == "BUY":
+                r = wb.buy(args.symbol, qty, price)
+            else:
+                r = wb.sell(args.symbol, qty, price)
+            print("Order response:", json.dumps(r, indent=2, default=str))
+            print("\nNow open the Webull app -> Orders. You should see this pending")
+            print("order. CANCEL it there to finish the test.")
+        except Exception as e:
+            print("Order FAILED:", e)
         return
 
     cfg = Config().validate()
