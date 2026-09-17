@@ -74,16 +74,56 @@ or `=supabase`.
 
 ## Live mode (Webull) — NOT enabled by default
 
-Live trading is deliberately hard to turn on and **does not work out of the box**.
-`WebullBroker` is a scaffold: its `get_cash` / `get_positions` / `buy` / `sell`
-methods are intentionally unimplemented so no unverified call can place a real
-order. To go live you must, in order:
+Live trading is deliberately hard to turn on. `WebullBroker` is wired against
+the official **Webull OpenAPI Python SDK** (`webull-openapi-python-sdk`), using
+verified calls (`account_v2.get_account_list`, `account_v2.get_account_balance`,
+`order_v3.place_order`). Order placement stays **disarmed** and `get_positions`
+intentionally raises until you complete the checklist below, so the Engine
+cannot run live end-to-end on unverified data.
 
-1. Set `AUTO_TRADE_MODE=live` **and** `AUTO_TRADE_LIVE_CONFIRM=I_UNDERSTAND_THE_RISK`.
-2. Implement the four `WebullBroker` methods against the **current Webull SDK/API**,
-   verifying every method name and parameter against Webull's official docs
-   (they are not guessed in this codebase on purpose).
-3. Test with the **smallest possible size** before trusting it.
+### Prerequisites
+
+- A Webull brokerage account is **not enough**. You need **Webull OpenAPI
+  developer credentials**: generate an `app_key` + `app_secret` at
+  <https://developer.webull.com>, and get your `account_id`.
+- `pip install webull-openapi-python-sdk`
+
+### Live credentials (env or Streamlit secrets)
+
+| Variable | Meaning |
+|---|---|
+| `WEBULL_APP_KEY` / `WEBULL_APP_SECRET` | OpenAPI credentials |
+| `WEBULL_ACCOUNT_ID` | the account to trade |
+| `WEBULL_REGION` | region, default `us` |
+| `WEBULL_API_ENDPOINT` | **optional** — leave unset; the SDK uses the default host for the region. Only set it (e.g. `api.webull.com`) if the connection fails without it. |
+| `WEBULL_ARM_LIVE_ORDERS` | must equal `YES` to allow real orders (default: disarmed) |
+
+### Staged go-live checklist (do these in order)
+
+1. **Read-only connection test** — no orders:
+   ```bash
+   python auto_trader.py --webull-test
+   ```
+   Confirm it returns your account list and balance. `get_cash()` reads
+   `total_cash_balance` and `get_positions()` maps `symbol`/`quantity`/
+   `cost_price` — both verified against a real Individual-Margin response.
+   Set `WEBULL_ACCOUNT_ID` to your **stock** (Individual Margin) account,
+   not the futures account.
+2. ~~Verify the positions response~~ — done; `get_positions` is implemented.
+   Note: tiny fractional "dust" lots (e.g. 0.00002 shares) are returned as-is;
+   handle/close those manually — the engine isn't meant to trade fractional dust.
+3. **One manual test order** at the smallest possible size, armed explicitly:
+   ```bash
+   export AUTO_TRADE_MODE=live
+   export AUTO_TRADE_LIVE_CONFIRM=I_UNDERSTAND_THE_RISK
+   export WEBULL_ARM_LIVE_ORDERS=YES
+   ```
+   (`WEBULL_API_ENDPOINT` is optional — leave it unset unless the connection fails.)
+   Place and then cancel one order by hand; confirm it appears in Webull.
+4. **Only then** consider letting the Engine place orders automatically — and
+   even then, keep the position size, stop-loss, and daily-loss limits tight.
+
+Orders are LIMIT orders at the engine's reference price by default.
 
 ## Dependencies
 

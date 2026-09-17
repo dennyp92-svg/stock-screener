@@ -31,6 +31,8 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 try:
+    import logging as _logging
+    _logging.getLogger("dotenv").setLevel(_logging.ERROR)  # silence parse warnings
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
@@ -66,16 +68,34 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _secret(name: str):
-    """Read a secret from Streamlit secrets (if running under Streamlit) then
-    from the environment. Lets the same code work in the app and headless."""
+    """Resolve a secret with the sidecar file taking priority, then the
+    environment, then Streamlit secrets.
+
+    The sidecar file (e.g. .webull_app_key next to this module) is a
+    manually-corrected store for values whose characters break .env parsing
+    (a leading '#'/'$' or an embedded quote). It wins so a stale or truncated
+    value in .env or .streamlit/secrets.toml can't override the corrected one.
+    Only Webull/Supabase creds ever have a sidecar; everything else falls
+    through to env/Streamlit unchanged. Works both in the app and headless."""
     try:
-        import streamlit as st
-        val = st.secrets.get(name, None)
-        if val is not None:
-            return val
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "." + name.lower())) as f:
+            data = f.read().strip()
+            if data:
+                return data
     except Exception:
         pass
-    return os.getenv(name)
+    val = os.getenv(name)
+    if val:
+        return val
+    try:
+        import streamlit as st
+        v = st.secrets.get(name, None)
+        if v:
+            return v
+    except Exception:
+        pass
+    return None
 
 
 def _supabase_creds():
@@ -88,6 +108,40 @@ def _supabase_creds():
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
     return url, key
+
+
+# Candidate keys for the account's available cash / buying power, most specific
+# first. Used to read the Webull balance response without hard-coding one
+# guessed field; if none match, the caller raises and asks for verification.
+_CASH_KEYS = ("total_cash_balance", "cash_balance", "settled_funds",
+              "available_funds", "day_buying_power", "buying_power", "cash")
+
+
+def _find_cash_field(obj):
+    """Best-effort recursive lookup of a cash-like numeric value in a JSON
+    response. Returns a float or None. Verify against a real response before
+    trusting it for live position sizing."""
+    def as_num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(obj, dict):
+        for key in _CASH_KEYS:
+            if key in obj:
+                n = as_num(obj[key])
+                if n is not None:
+                    return n
+        for v in obj.values():
+            found = _find_cash_field(v)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _find_cash_field(v)
+            if found is not None:
+                return found
+    return None
 
 
 DEFAULT_UNIVERSE = [
@@ -110,6 +164,9 @@ class Config:
     stop_loss_pct: float = field(default_factory=lambda: _env_float("AUTO_TRADE_STOP_PCT", 0.05))
     take_profit_pct: float = field(default_factory=lambda: _env_float("AUTO_TRADE_TAKE_PCT", 0.10))
     daily_loss_limit_pct: float = field(default_factory=lambda: _env_float("AUTO_TRADE_DAILY_LOSS_PCT", 0.05))
+    # Absolute daily loss cap in dollars. When > 0 it takes precedence over the
+    # percentage limit. Halts NEW entries once the day's loss reaches this.
+    daily_loss_limit_usd: float = field(default_factory=lambda: _env_float("AUTO_TRADE_DAILY_LOSS_USD", 25.0))
 
     # Entry rules (rule-based screen)
     min_change_pct: float = field(default_factory=lambda: _env_float("AUTO_TRADE_MIN_CHANGE", 2.0))
@@ -412,41 +469,147 @@ class PaperBroker(Broker):
 
 
 class WebullBroker(Broker):
-    """LIVE broker adapter — intentionally NOT wired to real order calls.
+    """LIVE broker adapter for the Webull OpenAPI Python SDK.
 
-    To enable live trading you must implement the four methods below against
-    the current Webull SDK/API and VERIFY every call and its parameters
-    against Webull's official documentation. Do not assume method names — I
-    have deliberately not guessed them, because an unverified order call is a
-    financial hazard. Wire this up together and test with the smallest
-    possible size before trusting it.
+    Wired against verified SDK calls (webull-openapi-python-sdk):
+        api_client = ApiClient(app_key, app_secret, region)
+        api_client.add_endpoint(region, endpoint)
+        trade_client = TradeClient(api_client)
+        trade_client.account_v2.get_account_list()
+        trade_client.account_v2.get_account_balance(account_id)
+        trade_client.order_v3.place_order(account_id, [order])
+        trade_client.order_v3.cancel_order(account_id, client_order_id)
+
+    SAFETY: order placement is DISARMED unless WEBULL_ARM_LIVE_ORDERS=YES, and
+    get_positions() intentionally raises until the live positions response has
+    been verified — so the automated Engine cannot run live end-to-end until a
+    human has confirmed the balance and positions mappings and done a manual
+    test order. Read-only methods (test_connection, get_account_balance_raw)
+    are safe to call for verifying credentials.
+
+    Credentials (env or Streamlit secrets):
+        WEBULL_APP_KEY, WEBULL_APP_SECRET, WEBULL_ACCOUNT_ID,
+        WEBULL_REGION (default "us"), WEBULL_API_ENDPOINT (region endpoint).
     """
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        # Expected credentials (names are placeholders — confirm against the
-        # SDK you use): WEBULL_APP_KEY / WEBULL_APP_SECRET / WEBULL_ACCOUNT_ID
-        self.app_key = os.getenv("WEBULL_APP_KEY")
-        self.app_secret = os.getenv("WEBULL_APP_SECRET")
-        self.account_id = os.getenv("WEBULL_ACCOUNT_ID")
+        self.app_key = _secret("WEBULL_APP_KEY")
+        self.app_secret = _secret("WEBULL_APP_SECRET")
+        self.account_id = _secret("WEBULL_ACCOUNT_ID")
+        self.region = (_secret("WEBULL_REGION") or "us").strip().lower()
+        self.endpoint = _secret("WEBULL_API_ENDPOINT")
+        self._trade_client = None
 
-    def _not_ready(self):
-        raise NotImplementedError(
-            "WebullBroker is a scaffold. Implement get_cash/get_positions/"
-            "buy/sell against the verified Webull SDK before live trading."
-        )
+    def _client(self):
+        if self._trade_client is not None:
+            return self._trade_client
+        if not (self.app_key and self.app_secret and self.account_id):
+            raise RuntimeError(
+                "Missing Webull credentials. Set WEBULL_APP_KEY, "
+                "WEBULL_APP_SECRET, and WEBULL_ACCOUNT_ID (generate the "
+                "app key/secret at developer.webull.com)."
+            )
+        # Import the SDK lazily so the module loads without it installed.
+        from webull.core.client import ApiClient
+        from webull.trade.trade_client import TradeClient
+        api_client = ApiClient(self.app_key, self.app_secret, self.region)
+        if self.endpoint:
+            api_client.add_endpoint(self.region, self.endpoint)
+        self._trade_client = TradeClient(api_client)
+        return self._trade_client
+
+    # ---- read-only (safe) ----
+    def test_connection(self) -> dict:
+        """Verify credentials by listing accounts. No orders. Returns json."""
+        res = self._client().account_v2.get_account_list()
+        return {"status_code": getattr(res, "status_code", None),
+                "body": res.json() if hasattr(res, "json") else res}
+
+    def get_account_balance_raw(self) -> dict:
+        res = self._client().account_v2.get_account_balance(self.account_id)
+        return {"status_code": getattr(res, "status_code", None),
+                "body": res.json() if hasattr(res, "json") else res}
 
     def get_cash(self) -> float:
-        self._not_ready()
+        body = self.get_account_balance_raw().get("body", {})
+        cash = _find_cash_field(body)
+        if cash is None:
+            raise RuntimeError(
+                "Could not locate a cash/buying-power field in the Webull "
+                "balance response. Run `python auto_trader.py --webull-test` "
+                "and confirm the exact field before enabling live sizing."
+            )
+        return float(cash)
 
     def get_positions(self) -> dict:
-        self._not_ready()
+        """Map Webull equity positions to {symbol: {qty, avg_price}}.
+
+        Verified against a real account_v2.get_account_position response:
+        each item has symbol, quantity, cost_price, instrument_type.
+        """
+        res = self._client().account_v2.get_account_position(self.account_id)
+        body = res.json() if hasattr(res, "json") else res
+        items = body if isinstance(body, list) else None
+        if items is None and isinstance(body, dict):
+            for v in body.values():
+                if isinstance(v, list):
+                    items = v
+                    break
+        out = {}
+        for p in (items or []):
+            if not isinstance(p, dict):
+                continue
+            if p.get("instrument_type", "EQUITY") != "EQUITY":
+                continue
+            sym = p.get("symbol")
+            try:
+                qty = float(p.get("quantity", 0))
+                avg = float(p.get("cost_price", 0))
+            except (TypeError, ValueError):
+                continue
+            if not sym or qty <= 0:
+                continue
+            out[sym] = {"qty": qty, "avg_price": avg}
+        return out
+
+    # ---- order placement (DISARMED by default) ----
+    def _build_order(self, symbol: str, qty: int, price: float, side: str) -> dict:
+        import uuid
+        return {
+            "combo_type": "NORMAL",
+            "client_order_id": uuid.uuid4().hex,
+            "symbol": symbol,
+            "instrument_type": "EQUITY",
+            "market": os.getenv("WEBULL_MARKET", "US"),
+            "order_type": "LIMIT",
+            "limit_price": str(round(price, 2)),
+            "quantity": str(int(qty)),
+            "support_trading_session": "CORE",
+            "side": side,
+            "time_in_force": "DAY",
+            "entrust_type": "QTY",
+        }
+
+    def _place(self, symbol: str, qty: int, price: float, side: str) -> dict:
+        if os.getenv("WEBULL_ARM_LIVE_ORDERS", "").strip().upper() != "YES":
+            raise RuntimeError(
+                "Live orders are DISARMED. Set WEBULL_ARM_LIVE_ORDERS=YES only "
+                "after a successful --webull-test and a manual smallest-size "
+                "test order."
+            )
+        order = self._build_order(symbol, qty, price, side)
+        res = self._client().order_v3.place_order(self.account_id, [order])
+        ok = getattr(res, "status_code", None) == 200
+        body = res.json() if hasattr(res, "json") else res
+        return {"ok": ok, "symbol": symbol, "qty": qty, "price": price,
+                "side": side, "response": body}
 
     def buy(self, symbol: str, qty: int, price: float) -> dict:
-        self._not_ready()
+        return self._place(symbol, qty, price, "BUY")
 
     def sell(self, symbol: str, qty: int, price: float) -> dict:
-        self._not_ready()
+        return self._place(symbol, qty, price, "SELL")
 
 
 # --------------------------------------------------------------------------
@@ -478,22 +641,53 @@ class Engine:
                 r = self.broker.sell(symbol, pos["qty"], price)
                 print(f"  TAKE-PROFIT {symbol} @ {price} (avg {avg}) -> {r}")
 
+    def _day_start_equity(self, today: str, equity_now: float) -> float:
+        """Return (and persist) the equity at the start of `today`.
+
+        Paper uses the broker's persisted state; live (or any non-paper broker)
+        uses a small JSON file next to this module so the day's starting point
+        survives across separate process runs.
+        """
+        if isinstance(self.broker, PaperBroker):
+            state = self.broker.state
+            if state.get("day") != today:
+                state["day"] = today
+                state["day_start_equity"] = equity_now
+                self.broker._save()
+            return state.get("day_start_equity") or equity_now
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            ".auto_trade_day.json")
+        data = {}
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            pass
+        if data.get("day") != today:
+            data = {"day": today, "day_start_equity": equity_now}
+            try:
+                with open(path, "w") as f:
+                    json.dump(data, f)
+            except Exception:
+                pass
+        return data.get("day_start_equity") or equity_now
+
     def _day_guard(self, equity_now: float) -> bool:
-        """Return True if new entries are allowed (daily loss limit not hit)."""
-        if not isinstance(self.broker, PaperBroker):
-            return True  # live broker would query its own day P&L
-        state = self.broker.state
+        """Return True if new entries are allowed (daily loss limit not hit).
+        Works for both paper and live brokers."""
         today = time.strftime("%Y-%m-%d")
-        if state.get("day") != today:
-            state["day"] = today
-            state["day_start_equity"] = equity_now
-            self.broker._save()
-        start = state.get("day_start_equity") or equity_now
-        if start <= 0:
+        start = self._day_start_equity(today, equity_now)
+        loss = start - equity_now  # positive means the account is down today
+
+        limit_usd = self.cfg.daily_loss_limit_usd
+        if limit_usd and limit_usd > 0:
+            if loss >= limit_usd:
+                print(f"  DAILY LOSS LIMIT hit (down ${loss:.2f} >= "
+                      f"${limit_usd:.2f}) — no new entries today")
+                return False
             return True
-        drawdown = (start - equity_now) / start
-        if drawdown >= self.cfg.daily_loss_limit_pct:
-            print(f"  DAILY LOSS LIMIT hit ({drawdown:.1%} >= "
+        if start > 0 and (loss / start) >= self.cfg.daily_loss_limit_pct:
+            print(f"  DAILY LOSS LIMIT hit ({loss / start:.1%} >= "
                   f"{self.cfg.daily_loss_limit_pct:.1%}) — no new entries today")
             return False
         return True
@@ -568,7 +762,9 @@ def build_broker(cfg: Config) -> Broker:
         if confirm != "I_UNDERSTAND_THE_RISK":
             raise SystemExit(
                 "LIVE mode blocked. Set AUTO_TRADE_LIVE_CONFIRM="
-                "I_UNDERSTAND_THE_RISK and implement WebullBroker first."
+                "I_UNDERSTAND_THE_RISK. Also verify credentials with "
+                "--webull-test and note orders stay disarmed until "
+                "WEBULL_ARM_LIVE_ORDERS=YES."
             )
         return WebullBroker(cfg)
     return PaperBroker(cfg)
@@ -582,7 +778,59 @@ def main():
                     help="seconds between cycles in --loop mode")
     ap.add_argument("--status", action="store_true",
                     help="print current paper portfolio and exit")
+    ap.add_argument("--webull-test", action="store_true",
+                    help="READ-ONLY: verify Webull credentials (account list "
+                         "+ balance). Places no orders.")
+    ap.add_argument("--webull-test-order", action="store_true",
+                    help="Place ONE small limit order (you confirm with YES). "
+                         "Priced not to fill; cancel it in the Webull app.")
+    ap.add_argument("--symbol", default="AXTX", help="test-order ticker")
+    ap.add_argument("--side", default="BUY", choices=["BUY", "SELL"])
+    ap.add_argument("--qty", default="1", help="test-order share quantity")
+    ap.add_argument("--price", default="1.00",
+                    help="test-order LIMIT price (default $1.00 — a BUY here "
+                         "sits unfilled on a higher-priced stock)")
     args = ap.parse_args()
+
+    if args.webull_test:
+        print("Webull connection test (read-only, no orders):")
+        # Show which credentials the code actually sees (lengths, not values).
+        for _k in ("WEBULL_APP_KEY", "WEBULL_APP_SECRET", "WEBULL_ACCOUNT_ID"):
+            _v = _secret(_k) or ""
+            mark = "OK" if _v else "MISSING"
+            print(f"  {_k}: {len(str(_v))} chars [{mark}]")
+        wb = WebullBroker(Config())
+        try:
+            print("account_list:", json.dumps(wb.test_connection(), indent=2, default=str))
+            print("account_balance:", json.dumps(wb.get_account_balance_raw(), indent=2, default=str))
+        except Exception as e:
+            print("Webull test FAILED:", e)
+        return
+
+    if args.webull_test_order:
+        qty = int(float(args.qty))
+        price = float(args.price)
+        print("=== LIVE Webull test order ===")
+        print(f"  {args.side} {qty} share(s) of {args.symbol} as a LIMIT at ${price:.2f}")
+        print("  This is a REAL order on your Webull account. It is priced so it")
+        print("  should NOT fill; you will cancel it in the Webull app afterward.")
+        confirm = input("Type YES (capitals) to place this real order: ").strip()
+        if confirm != "YES":
+            print("Cancelled — no order placed.")
+            return
+        os.environ["WEBULL_ARM_LIVE_ORDERS"] = "YES"  # armed only after explicit YES
+        wb = WebullBroker(Config())
+        try:
+            if args.side.upper() == "BUY":
+                r = wb.buy(args.symbol, qty, price)
+            else:
+                r = wb.sell(args.symbol, qty, price)
+            print("Order response:", json.dumps(r, indent=2, default=str))
+            print("\nNow open the Webull app -> Orders. You should see this pending")
+            print("order. CANCEL it there to finish the test.")
+        except Exception as e:
+            print("Order FAILED:", e)
+        return
 
     cfg = Config().validate()
     broker = build_broker(cfg)
