@@ -162,6 +162,9 @@ class Config:
     stop_loss_pct: float = field(default_factory=lambda: _env_float("AUTO_TRADE_STOP_PCT", 0.05))
     take_profit_pct: float = field(default_factory=lambda: _env_float("AUTO_TRADE_TAKE_PCT", 0.10))
     daily_loss_limit_pct: float = field(default_factory=lambda: _env_float("AUTO_TRADE_DAILY_LOSS_PCT", 0.05))
+    # Absolute daily loss cap in dollars. When > 0 it takes precedence over the
+    # percentage limit. Halts NEW entries once the day's loss reaches this.
+    daily_loss_limit_usd: float = field(default_factory=lambda: _env_float("AUTO_TRADE_DAILY_LOSS_USD", 25.0))
 
     # Entry rules (rule-based screen)
     min_change_pct: float = field(default_factory=lambda: _env_float("AUTO_TRADE_MIN_CHANGE", 2.0))
@@ -636,22 +639,53 @@ class Engine:
                 r = self.broker.sell(symbol, pos["qty"], price)
                 print(f"  TAKE-PROFIT {symbol} @ {price} (avg {avg}) -> {r}")
 
+    def _day_start_equity(self, today: str, equity_now: float) -> float:
+        """Return (and persist) the equity at the start of `today`.
+
+        Paper uses the broker's persisted state; live (or any non-paper broker)
+        uses a small JSON file next to this module so the day's starting point
+        survives across separate process runs.
+        """
+        if isinstance(self.broker, PaperBroker):
+            state = self.broker.state
+            if state.get("day") != today:
+                state["day"] = today
+                state["day_start_equity"] = equity_now
+                self.broker._save()
+            return state.get("day_start_equity") or equity_now
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            ".auto_trade_day.json")
+        data = {}
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            pass
+        if data.get("day") != today:
+            data = {"day": today, "day_start_equity": equity_now}
+            try:
+                with open(path, "w") as f:
+                    json.dump(data, f)
+            except Exception:
+                pass
+        return data.get("day_start_equity") or equity_now
+
     def _day_guard(self, equity_now: float) -> bool:
-        """Return True if new entries are allowed (daily loss limit not hit)."""
-        if not isinstance(self.broker, PaperBroker):
-            return True  # live broker would query its own day P&L
-        state = self.broker.state
+        """Return True if new entries are allowed (daily loss limit not hit).
+        Works for both paper and live brokers."""
         today = time.strftime("%Y-%m-%d")
-        if state.get("day") != today:
-            state["day"] = today
-            state["day_start_equity"] = equity_now
-            self.broker._save()
-        start = state.get("day_start_equity") or equity_now
-        if start <= 0:
+        start = self._day_start_equity(today, equity_now)
+        loss = start - equity_now  # positive means the account is down today
+
+        limit_usd = self.cfg.daily_loss_limit_usd
+        if limit_usd and limit_usd > 0:
+            if loss >= limit_usd:
+                print(f"  DAILY LOSS LIMIT hit (down ${loss:.2f} >= "
+                      f"${limit_usd:.2f}) — no new entries today")
+                return False
             return True
-        drawdown = (start - equity_now) / start
-        if drawdown >= self.cfg.daily_loss_limit_pct:
-            print(f"  DAILY LOSS LIMIT hit ({drawdown:.1%} >= "
+        if start > 0 and (loss / start) >= self.cfg.daily_loss_limit_pct:
+            print(f"  DAILY LOSS LIMIT hit ({loss / start:.1%} >= "
                   f"{self.cfg.daily_loss_limit_pct:.1%}) — no new entries today")
             return False
         return True
