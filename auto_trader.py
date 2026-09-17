@@ -730,8 +730,13 @@ def main():
     args = ap.parse_args()
 
     if args.webull_test:
-        wb = WebullBroker(Config())
         print("Webull connection test (read-only, no orders):")
+        # Show which credentials the code actually sees (lengths, not values).
+        for _k in ("WEBULL_APP_KEY", "WEBULL_APP_SECRET", "WEBULL_ACCOUNT_ID"):
+            _v = _secret(_k) or ""
+            mark = "OK" if _v else "MISSING"
+            print(f"  {_k}: {len(str(_v))} chars [{mark}]")
+        wb = WebullBroker(Config())
         try:
             print("account_list:", json.dumps(wb.test_connection(), indent=2, default=str))
             print("account_balance:", json.dumps(wb.get_account_balance_raw(), indent=2, default=str))
