@@ -1,0 +1,37 @@
+name: Auto-Trader (Paper)
+
+# Runs one PAPER trading cycle on a schedule during US market hours.
+# No real money: AUTO_TRADE_MODE=paper and no Webull credentials are provided,
+# so it can only ever simulate. State is saved to Supabase (auto_trade_state),
+# which the app's Auto-Trader tab reads.
+
+on:
+  schedule:
+    # Every 30 min, ~US market hours (13:00-20:00 UTC), weekdays.
+    - cron: '*/30 13-20 * * 1-5'
+  workflow_dispatch:   # lets you run it on demand from the Actions tab
+
+jobs:
+  paper-trade:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas anthropic supabase python-dotenv requests
+
+      - name: Run one paper cycle
+        env:
+          AUTO_TRADE_MODE: paper
+          AUTO_TRADE_USE_AI: 'true'          # rules-only if ANTHROPIC_KEY is unset
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
+        run: |
+          timeout 300 python auto_trader.py --once || true

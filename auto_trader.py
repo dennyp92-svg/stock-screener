@@ -31,6 +31,8 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 try:
+    import logging as _logging
+    _logging.getLogger("dotenv").setLevel(_logging.ERROR)  # silence parse warnings
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
