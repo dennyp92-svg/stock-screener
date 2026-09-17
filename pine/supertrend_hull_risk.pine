@@ -1,0 +1,191 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// =============================================================================================================
+// Supertrend + Hull MA + Risk Management
+// -------------------------------------------------------------------------------------------------------------
+// A trend-following STRATEGY that combines:
+//   1) Supertrend  -- ATR-band trend filter, in the style popularized by KivancOzbilgic
+//   2) Hull MA     -- nested-WMA smoothed trend, in the style popularized by InSilico
+//   3) Risk Mgmt   -- percent-risk position sizing, ATR / fixed stops, R-multiple take-profit, optional trailing
+//
+// NOTE ON ATTRIBUTION: This is an independent implementation of the standard, publicly documented algorithms
+// (Supertrend = ATR bands; Hull MA = WMA(2*WMA(n/2) - WMA(n), sqrt(n))). It is NOT a verbatim copy of any
+// specific author's proprietary script. Verify behavior on your own charts before using it with real money.
+// =============================================================================================================
+
+//@version=5
+strategy("Supertrend + Hull MA + Risk Management",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     default_qty_value    = 0,
+     pyramiding           = 0,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.04,
+     calc_on_every_tick   = false,
+     process_orders_on_close = true)
+
+// -------------------------------------------------------------------------------------------------------------
+// INPUTS
+// -------------------------------------------------------------------------------------------------------------
+grpST   = "Supertrend (KivancOzbilgic style)"
+stFactor   = input.float(3.0,   "ATR Multiplier",      minval = 0.1, step = 0.1, group = grpST)
+stAtrLen   = input.int(10,      "ATR Length",          minval = 1,               group = grpST)
+stChangeAtr= input.bool(true,   "Change ATR calc method (RMA vs SMA of TR)", group = grpST,
+     tooltip = "ON = Wilder's RMA (ta.atr). OFF = simple moving average of True Range.")
+stSrc      = input.source(hl2,  "Supertrend Source",   group = grpST)
+
+grpHull = "Hull Moving Average (InSilico style)"
+hullLen    = input.int(55,      "Hull MA Length",      minval = 1,               group = grpHull)
+hullSrc    = input.source(close,"Hull MA Source",      group = grpHull)
+useHullFilter = input.bool(true,"Require Hull slope to confirm entries", group = grpHull,
+     tooltip = "Only take longs when Hull MA is rising and shorts when it is falling.")
+
+grpTrade = "Trade Direction"
+allowLong  = input.bool(true,   "Allow Long trades",   group = grpTrade)
+allowShort = input.bool(false,  "Allow Short trades",  group = grpTrade)
+
+grpRisk = "Risk Management"
+riskPerTradePct = input.float(1.0, "Risk per trade (% of equity)", minval = 0.0, step = 0.1, group = grpRisk,
+     tooltip = "Position size is calculated so that a stop-out loses this % of current equity. Set 0 to disable sizing.")
+stopType   = input.string("ATR", "Stop-loss type", options = ["ATR", "Percent", "Supertrend"], group = grpRisk)
+stopAtrLen = input.int(14,       "Stop ATR Length",  minval = 1,               group = grpRisk)
+stopAtrMult= input.float(2.0,    "Stop ATR Multiplier", minval = 0.1, step = 0.1, group = grpRisk)
+stopPct    = input.float(3.0,    "Stop Percent (%)", minval = 0.1, step = 0.1, group = grpRisk)
+rrRatio    = input.float(2.0,    "Take-profit R multiple", minval = 0.0, step = 0.1, group = grpRisk,
+     tooltip = "Take-profit distance = R multiple x stop distance. Set 0 to disable the fixed take-profit.")
+useTrail   = input.bool(false,   "Use trailing stop (ATR)", group = grpRisk)
+trailAtrMult = input.float(2.5,  "Trailing ATR Multiplier", minval = 0.1, step = 0.1, group = grpRisk)
+
+// -------------------------------------------------------------------------------------------------------------
+// 1) SUPERTREND
+//    Manual implementation so the "change ATR method" toggle is honored (RMA of TR vs SMA of TR).
+// -------------------------------------------------------------------------------------------------------------
+atr = stChangeAtr ? ta.atr(stAtrLen) : ta.sma(ta.tr(true), stAtrLen)
+
+upperBasic = stSrc + stFactor * atr
+lowerBasic = stSrc - stFactor * atr
+
+var float up = na
+var float dn = na
+var int   trend = 1
+
+// Lower band (support in an uptrend): can only rise while price holds above it.
+up := na(up[1]) ? lowerBasic : (close[1] > up[1] ? math.max(lowerBasic, up[1]) : lowerBasic)
+// Upper band (resistance in a downtrend): can only fall while price stays below it.
+dn := na(dn[1]) ? upperBasic : (close[1] < dn[1] ? math.min(upperBasic, dn[1]) : upperBasic)
+
+trend := na(trend[1]) ? 1 : trend[1]
+trend := trend == -1 and close > dn[1] ? 1 : (trend == 1 and close < up[1] ? -1 : trend)
+
+supertrend = trend == 1 ? up : dn
+
+stLong  = trend ==  1 and trend[1] == -1   // trend flipped up
+stShort = trend == -1 and trend[1] ==  1   // trend flipped down
+
+plot(trend == 1 ? supertrend : na, "Supertrend Up",   color = color.new(color.green, 0), style = plot.style_linebr, linewidth = 2)
+plot(trend == -1 ? supertrend : na, "Supertrend Down", color = color.new(color.red,   0), style = plot.style_linebr, linewidth = 2)
+
+// -------------------------------------------------------------------------------------------------------------
+// 2) HULL MOVING AVERAGE
+//    HMA = WMA( 2*WMA(src, n/2) - WMA(src, n), round(sqrt(n)) )
+// -------------------------------------------------------------------------------------------------------------
+hma(source, length) =>
+    ta.wma(2 * ta.wma(source, math.floor(length / 2)) - ta.wma(source, length), math.round(math.sqrt(length)))
+
+hull = hma(hullSrc, hullLen)
+hullRising  = hull > hull[1]
+hullFalling = hull < hull[1]
+
+plot(hull, "Hull MA", color = hullRising ? color.new(color.aqua, 0) : color.new(color.orange, 0), linewidth = 2)
+
+// -------------------------------------------------------------------------------------------------------------
+// 3) ENTRY LOGIC (Supertrend flip, confirmed by Hull slope if enabled)
+// -------------------------------------------------------------------------------------------------------------
+longSignal  = stLong  and (not useHullFilter or hullRising)
+shortSignal = stShort and (not useHullFilter or hullFalling)
+
+// -------------------------------------------------------------------------------------------------------------
+// 4) RISK MANAGEMENT: stop distance, position size, targets
+// -------------------------------------------------------------------------------------------------------------
+stopAtr = ta.atr(stopAtrLen)
+
+// Stop distance (price units) for the signal bar, per selected method.
+longStopDist =
+     stopType == "ATR"        ? stopAtrMult * stopAtr :
+     stopType == "Percent"    ? close * stopPct / 100 :
+     math.max(close - up, syminfo.mintick)             // "Supertrend": distance to the trend line
+
+shortStopDist =
+     stopType == "ATR"        ? stopAtrMult * stopAtr :
+     stopType == "Percent"    ? close * stopPct / 100 :
+     math.max(dn - close, syminfo.mintick)
+
+// Percent-risk position sizing: qty such that (stop distance * qty) = risk% of equity.
+riskCapital = strategy.equity * riskPerTradePct / 100
+longQty  = riskPerTradePct > 0 and longStopDist  > 0 ? riskCapital / longStopDist  : na
+shortQty = riskPerTradePct > 0 and shortStopDist > 0 ? riskCapital / shortStopDist : na
+
+// -------------------------------------------------------------------------------------------------------------
+// 5) ORDER EXECUTION
+// -------------------------------------------------------------------------------------------------------------
+if allowLong and longSignal
+    if allowShort
+        strategy.close("Short", comment = "flip")
+    qty = na(longQty) ? na : longQty
+    strategy.entry("Long", strategy.long, qty = qty)
+
+if allowShort and shortSignal
+    if allowLong
+        strategy.close("Long", comment = "flip")
+    qty = na(shortQty) ? na : shortQty
+    strategy.entry("Short", strategy.short, qty = qty)
+
+// Freeze the stop/target at the entry bar so they do not drift with later ATR readings.
+var float longStopPrice   = na
+var float longTargetPrice = na
+var float shortStopPrice  = na
+var float shortTargetPrice= na
+
+if strategy.position_size > 0 and strategy.position_size[1] <= 0
+    // just went long
+    longStopPrice   := strategy.position_avg_price - longStopDist
+    longTargetPrice := rrRatio > 0 ? strategy.position_avg_price + rrRatio * longStopDist : na
+
+if strategy.position_size < 0 and strategy.position_size[1] >= 0
+    // just went short
+    shortStopPrice   := strategy.position_avg_price + shortStopDist
+    shortTargetPrice := rrRatio > 0 ? strategy.position_avg_price - rrRatio * shortStopDist : na
+
+// Exits
+if strategy.position_size > 0
+    if useTrail
+        strategy.exit("Long Exit", from_entry = "Long",
+             limit  = longTargetPrice,
+             trail_price  = close,
+             trail_offset = trailAtrMult * stopAtr / syminfo.mintick)
+    else
+        strategy.exit("Long Exit", from_entry = "Long", stop = longStopPrice, limit = longTargetPrice)
+
+if strategy.position_size < 0
+    if useTrail
+        strategy.exit("Short Exit", from_entry = "Short",
+             limit  = shortTargetPrice,
+             trail_price  = close,
+             trail_offset = trailAtrMult * stopAtr / syminfo.mintick)
+    else
+        strategy.exit("Short Exit", from_entry = "Short", stop = shortStopPrice, limit = shortTargetPrice)
+
+// -------------------------------------------------------------------------------------------------------------
+// 6) VISUALS
+// -------------------------------------------------------------------------------------------------------------
+plot(strategy.position_size > 0 ? longStopPrice   : na, "Long Stop",    color = color.new(color.red,   40), style = plot.style_linebr)
+plot(strategy.position_size > 0 ? longTargetPrice : na, "Long Target",  color = color.new(color.green, 40), style = plot.style_linebr)
+plot(strategy.position_size < 0 ? shortStopPrice  : na, "Short Stop",   color = color.new(color.red,   40), style = plot.style_linebr)
+plot(strategy.position_size < 0 ? shortTargetPrice: na, "Short Target", color = color.new(color.green, 40), style = plot.style_linebr)
+
+plotshape(allowLong  and longSignal,  "Long Entry",  style = shape.triangleup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small)
+plotshape(allowShort and shortSignal, "Short Entry", style = shape.triangledown, location = location.abovebar, color = color.new(color.red,   0), size = size.small)
+
+// Alerts
+alertcondition(longSignal,  "Long signal",  "Supertrend+Hull: LONG signal")
+alertcondition(shortSignal, "Short signal", "Supertrend+Hull: SHORT signal")
