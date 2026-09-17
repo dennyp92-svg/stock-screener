@@ -145,9 +145,18 @@ def _find_cash_field(obj):
 
 
 DEFAULT_UNIVERSE = [
-    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD", "AVGO",
-    "PLTR", "COIN", "MSTR", "SOFI", "HOOD", "SMCI", "ARM", "NFLX", "UBER",
-    "MU", "MRVL", "CRWD", "PANW", "SHOP", "RKLB", "IONQ", "RGTI",
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AVGO", "AMD",
+    "ORCL", "PLTR", "CRM", "SNOW", "DDOG", "NET", "ARM", "SMCI", "SOFI",
+    "MSTR", "COIN", "NFLX", "DIS", "ROKU", "SPOT", "UBER", "ABNB", "SQ",
+    "PYPL", "HOOD", "NU", "V", "MA", "JPM", "BAC", "WFC", "GS", "MS", "XOM",
+    "CVX", "COP", "OXY", "JNJ", "PFE", "MRNA", "LLY", "ABBV", "BMY", "MRK",
+    "AMGN", "COST", "WMT", "TGT", "HD", "LOW", "BA", "LMT", "RTX", "NOC",
+    "NIO", "RIVN", "LCID", "XPEV", "F", "GM", "INTC", "QCOM", "MU", "AMAT",
+    "KLAC", "TXN", "ADI", "MRVL", "ENPH", "FSLR", "ALAB", "AEHR", "IOT",
+    "COHR", "SITM", "MARA", "RIOT", "CRWD", "PANW", "ZM", "SHOP", "BABA",
+    "JD", "PDD", "RKLB", "ASTS", "GME", "AMC", "IREN", "CLSK", "HUT", "IONQ",
+    "RGTI", "QUBT", "ACHR", "JOBY", "LYFT", "ASML", "AXON", "VRTX", "REGN",
+    "BIIB", "ILMN", "ALNY", "CRSP", "BEAM", "NTLA", "JAZZ",
 ]
 
 
