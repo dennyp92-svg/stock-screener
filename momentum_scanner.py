@@ -822,6 +822,33 @@ with tab3:
     else:
         st.caption("No trades yet.")
 
+    st.subheader("📓 Trade journal (closed trades + lessons)")
+    at_journal = at_state.get("journal", [])
+    if at_journal:
+        wins = [j for j in at_journal if (j.get("pnl") or 0) >= 0]
+        realized = round(sum((j.get("pnl") or 0) for j in at_journal), 2)
+        jc1, jc2, jc3 = st.columns(3)
+        jc1.metric("Closed trades", len(at_journal))
+        jc2.metric("Win rate", f"{round(100*len(wins)/len(at_journal))}%")
+        jc3.metric("Realized P&L", f"${realized:,.2f}")
+        for j in reversed(at_journal[-15:]):
+            pnl = j.get("pnl", 0) or 0
+            icon = "🟢" if pnl >= 0 else "🔴"
+            with st.expander(f"{icon} {j.get('symbol')}  "
+                             f"${j.get('entry_price')} → ${j.get('exit_price')}  "
+                             f"({j.get('pnl_pct')}%, {j.get('exit_reason')})"):
+                em = j.get("entry_meta", {}) or {}
+                st.caption(f"Entry: change {em.get('chg')}%, RSI {em.get('rsi')}, "
+                           f"vol spike {em.get('vol_spike')}x | "
+                           f"P&L ${pnl} | {j.get('entry_ts')} → {j.get('exit_ts')}")
+                if j.get("lesson"):
+                    st.info("Lesson: " + j["lesson"])
+                else:
+                    st.caption("(no AI lesson recorded for this trade)")
+    else:
+        st.caption("No closed trades yet — the journal fills in as positions hit "
+                   "their stop-loss or take-profit.")
+
     st.divider()
     with st.expander("⚙️ Strategy settings (from environment / defaults)"):
         st.write({
