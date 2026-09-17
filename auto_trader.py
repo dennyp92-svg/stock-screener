@@ -66,20 +66,15 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _secret(name: str):
-    """Read a secret from Streamlit secrets, then the environment, then a plain
-    sidecar file (e.g. .webull_app_key) next to this module. The sidecar is a
-    last-resort store for values whose characters break .env parsing (a leading
-    '#'/'$' or an embedded quote). Works both in the app and headless."""
-    try:
-        import streamlit as st
-        val = st.secrets.get(name, None)
-        if val:
-            return val
-    except Exception:
-        pass
-    val = os.getenv(name)
-    if val:
-        return val
+    """Resolve a secret with the sidecar file taking priority, then the
+    environment, then Streamlit secrets.
+
+    The sidecar file (e.g. .webull_app_key next to this module) is a
+    manually-corrected store for values whose characters break .env parsing
+    (a leading '#'/'$' or an embedded quote). It wins so a stale or truncated
+    value in .env or .streamlit/secrets.toml can't override the corrected one.
+    Only Webull/Supabase creds ever have a sidecar; everything else falls
+    through to env/Streamlit unchanged. Works both in the app and headless."""
     try:
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, "." + name.lower())) as f:
@@ -88,7 +83,17 @@ def _secret(name: str):
                 return data
     except Exception:
         pass
-    return val
+    val = os.getenv(name)
+    if val:
+        return val
+    try:
+        import streamlit as st
+        v = st.secrets.get(name, None)
+        if v:
+            return v
+    except Exception:
+        pass
+    return None
 
 
 def _supabase_creds():
