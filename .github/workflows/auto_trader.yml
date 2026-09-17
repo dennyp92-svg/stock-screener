@@ -29,7 +29,13 @@ jobs:
       - name: Run one paper cycle
         env:
           AUTO_TRADE_MODE: paper
-          AUTO_TRADE_USE_AI: 'true'          # rules-only if ANTHROPIC_KEY is unset
+          # Loosened so it actually trades: AI veto was rejecting every candidate,
+          # and the momentum thresholds were too tight. Rules-only for now.
+          AUTO_TRADE_USE_AI: 'false'
+          AUTO_TRADE_MIN_CHANGE: '1.0'       # was 2.0
+          AUTO_TRADE_MIN_VOL_SPIKE: '1.2'    # was 1.5
+          AUTO_TRADE_MIN_RSI: '45'           # was 50
+          AUTO_TRADE_MAX_RSI: '78'           # was 75
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
