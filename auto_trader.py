@@ -852,6 +852,9 @@ def main():
                     help="seconds between cycles in --loop mode")
     ap.add_argument("--status", action="store_true",
                     help="print current paper portfolio and exit")
+    ap.add_argument("--journal", action="store_true",
+                    help="print the paper trade journal (closed trades + "
+                         "lessons + win rate) and exit")
     ap.add_argument("--webull-test", action="store_true",
                     help="READ-ONLY: verify Webull credentials (account list "
                          "+ balance). Places no orders.")
@@ -914,6 +917,27 @@ def main():
             "mode": cfg.mode, "cash": broker.get_cash(),
             "positions": broker.get_positions(),
         }, indent=2))
+        return
+
+    if args.journal:
+        state = getattr(broker, "state", {})
+        j = state.get("journal", [])
+        wins = [x for x in j if (x.get("pnl") or 0) >= 0]
+        realized = round(sum((x.get("pnl") or 0) for x in j), 2)
+        print(f"=== TRADE JOURNAL: {len(j)} closed trades ===")
+        if j:
+            print(f"win rate: {round(100 * len(wins) / len(j))}%  "
+                  f"realized P&L: ${realized}")
+        for x in j:
+            print(f"- {x.get('symbol')}: ${x.get('entry_price')} -> "
+                  f"${x.get('exit_price')}  {x.get('pnl_pct')}% "
+                  f"({x.get('exit_reason')})  P&L ${x.get('pnl')}")
+            if x.get("lesson"):
+                print(f"    lesson: {x['lesson']}")
+        pos = broker.get_positions()
+        print(f"--- open positions ({len(pos)}): "
+              f"{', '.join(pos.keys()) if pos else 'none'} ---")
+        print(f"cash=${broker.get_cash()}")
         return
 
     engine = Engine(cfg, broker)
