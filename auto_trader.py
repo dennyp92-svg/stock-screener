@@ -1197,6 +1197,9 @@ def main():
                     help="seconds between cycles in --loop mode")
     ap.add_argument("--status", action="store_true",
                     help="print current paper portfolio and exit")
+    ap.add_argument("--sell", metavar="SYMBOL",
+                    help="PAPER only: sell the whole position in SYMBOL at the "
+                         "current price (market hours only), journal it, and exit")
     ap.add_argument("--repair-journal", action="store_true",
                     help="add journal entries for sales in the trade log that "
                          "the journal is missing (journal only), then exit")
@@ -1268,6 +1271,24 @@ def main():
             "mode": cfg.mode, "cash": broker.get_cash(),
             "positions": broker.get_positions(),
         }, indent=2))
+        return
+
+    if args.sell:
+        sym = args.sell.strip().upper()
+        if not isinstance(broker, PaperBroker):
+            raise SystemExit("--sell only works on the paper account")
+        if not market_is_open():
+            raise SystemExit("market closed (weekdays 9:30-16:00 New York) - not selling")
+        pos = broker.get_positions().get(sym)
+        if not pos:
+            raise SystemExit(f"no open paper position in {sym}")
+        d = get_stock_data(sym)
+        if not d:
+            raise SystemExit(f"could not get a price for {sym} - not selling")
+        qty, avg = pos["qty"], pos["avg_price"]
+        r = broker.sell(sym, qty, d["price"], exit_reason="MANUAL")
+        print(f"SOLD {sym} x{qty} @ {d['price']} (avg {avg}) "
+              f"P&L ${r.get('realized')} ({r.get('pnl_pct')}%)")
         return
 
     if args.repair_journal:
