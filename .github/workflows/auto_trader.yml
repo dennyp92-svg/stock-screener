@@ -15,6 +15,10 @@ on:
         description: 'Print the trade journal instead of trading'
         type: boolean
         default: false
+      audit:
+        description: 'Read-only account audit instead of trading'
+        type: boolean
+        default: false
 
 jobs:
   paper-trade:
@@ -45,7 +49,9 @@ jobs:
           SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
         run: |
-          if [ "${{ github.event.inputs.report }}" = "true" ]; then
+          if [ "${{ github.event.inputs.audit }}" = "true" ]; then
+            python auto_trader.py --audit
+          elif [ "${{ github.event.inputs.report }}" = "true" ]; then
             python auto_trader.py --journal
           else
             timeout 300 python auto_trader.py --once || true
