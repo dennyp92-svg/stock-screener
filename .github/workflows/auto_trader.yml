@@ -19,6 +19,10 @@ on:
         description: 'Read-only account audit instead of trading'
         type: boolean
         default: false
+      repair_journal:
+        description: 'Add missing journal entries from the trade log (journal only)'
+        type: boolean
+        default: false
 
 jobs:
   paper-trade:
@@ -49,7 +53,9 @@ jobs:
           SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
         run: |
-          if [ "${{ github.event.inputs.audit }}" = "true" ]; then
+          if [ "${{ github.event.inputs.repair_journal }}" = "true" ]; then
+            python auto_trader.py --repair-journal
+          elif [ "${{ github.event.inputs.audit }}" = "true" ]; then
             python auto_trader.py --audit
           elif [ "${{ github.event.inputs.report }}" = "true" ]; then
             python auto_trader.py --journal
