@@ -527,6 +527,52 @@ def audit_report(state: dict, starting_cash: float) -> list:
         out.append(f"{k:6} x{p['qty']} @ {p['avg_price']}  entry {p.get('entry_ts')}")
     return out
 
+def _ts_close(a, b, seconds: int = 5) -> bool:
+    from datetime import datetime
+    try:
+        fa = datetime.strptime(str(a)[:19], "%Y-%m-%d %H:%M:%S")
+        fb = datetime.strptime(str(b)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return abs((fa - fb).total_seconds()) <= seconds
+
+
+def repair_journal(state: dict) -> list:
+    """Add journal entries for SELLs in the trade log that the journal is
+    missing (matched by symbol, price and time). Entry price and time come
+    from replaying the log's BUYs for that symbol. Only the journal is
+    changed; running it again adds nothing. Returns the added records."""
+    journal = state.setdefault("journal", [])
+    held = {}      # symbol -> [qty, avg_price, first_buy_ts]
+    added = []
+    for t in state.get("trades", []):
+        sym, q, px = t.get("symbol"), t.get("qty") or 0, t.get("price") or 0
+        h = held.setdefault(sym, [0, 0.0, None])
+        if t.get("side") == "BUY":
+            h[1] = (h[1] * h[0] + px * q) / (h[0] + q) if h[0] + q else 0.0
+            h[0] += q
+            h[2] = h[2] or t.get("ts")
+        elif t.get("side") == "SELL":
+            avg, entry_ts = h[1], h[2]
+            h[0] -= q
+            if h[0] <= 0:
+                held[sym] = [0, 0.0, None]
+            if any(x.get("symbol") == sym and abs((x.get("exit_price") or 0) - px) < 0.01
+                   and _ts_close(x.get("exit_ts"), t.get("ts")) for x in journal):
+                continue
+            rec = {
+                "symbol": sym, "qty": q, "entry_price": round(avg, 4), "entry_ts": entry_ts,
+                "entry_meta": {}, "exit_price": round(px, 4), "exit_ts": t.get("ts"),
+                "exit_reason": "BACKFILLED (not journaled at the time)",
+                "pnl": t.get("realized"),
+                "pnl_pct": round((px / avg - 1) * 100, 2) if avg else None,
+                "lesson": None, "backfilled": True,
+            }
+            journal.append(rec)
+            added.append(rec)
+    journal.sort(key=lambda x: str(x.get("exit_ts") or ""))
+    return added
+
 # --------------------------------------------------------------------------
 # State persistence (paper portfolio)
 # --------------------------------------------------------------------------
@@ -1151,6 +1197,9 @@ def main():
                     help="seconds between cycles in --loop mode")
     ap.add_argument("--status", action="store_true",
                     help="print current paper portfolio and exit")
+    ap.add_argument("--repair-journal", action="store_true",
+                    help="add journal entries for sales in the trade log that "
+                         "the journal is missing (journal only), then exit")
     ap.add_argument("--audit", action="store_true",
                     help="READ-ONLY: reconcile the paper account (trade log vs "
                          "cash, positions and journal) and exit")
@@ -1219,6 +1268,18 @@ def main():
             "mode": cfg.mode, "cash": broker.get_cash(),
             "positions": broker.get_positions(),
         }, indent=2))
+        return
+
+    if args.repair_journal:
+        if not isinstance(broker, PaperBroker):
+            raise SystemExit("--repair-journal only works on the paper account")
+        added = repair_journal(broker.state)
+        if added:
+            broker._save()
+        print(f"added {len(added)} journal entr{'y' if len(added) == 1 else 'ies'}")
+        for x in added:
+            print(f"- {x['symbol']} x{x['qty']}: ${x['entry_price']} -> ${x['exit_price']}  "
+                  f"{x['pnl_pct']}%  P&L ${x['pnl']}  (sold {x['exit_ts']})")
         return
 
     if args.audit:
