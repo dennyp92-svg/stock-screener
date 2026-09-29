@@ -460,6 +460,62 @@ def benchmark_report(state: dict, starting_cash: float, symbol: str = "QQQ") -> 
     return lines
 
 
+def audit_report(state: dict, starting_cash: float) -> list:
+    """Read-only reconciliation of the paper account: replays the trade log
+    from the starting cash and cross-checks it against the cash balance, the
+    open positions and the journal, listing every mismatch it finds."""
+    start = float(state.get("starting_cash") or starting_cash)
+    trades = state.get("trades", [])
+    journal = state.get("journal", [])
+    positions = state.get("positions", {})
+    out = [f"=== AUDIT (starting cash ${start:,.2f}) ==="]
+
+    cash, held, realized_log = start, {}, 0.0
+    out.append(f"--- trade log ({len(trades)} entries) ---")
+    for t in trades:
+        q, px = t.get("qty") or 0, t.get("price") or 0
+        if t.get("side") == "BUY":
+            cash -= q * px
+            held[t["symbol"]] = held.get(t["symbol"], 0) + q
+        elif t.get("side") == "SELL":
+            cash += q * px
+            held[t["symbol"]] = held.get(t["symbol"], 0) - q
+            realized_log += t.get("realized") or 0
+        out.append(f"{t.get('ts')}  {t.get('side'):4} {t.get('symbol'):6} x{q} @ {px}"
+                   + (f"  realized {t.get('realized')}" if t.get("side") == "SELL" else ""))
+    out.append(f"replayed cash ${cash:,.2f} vs actual ${state.get('cash', 0):,.2f}  "
+               f"(diff ${state.get('cash', 0) - cash:+,.2f})")
+
+    held = {k: v for k, v in held.items() if v}
+    actual = {k: p["qty"] for k, p in positions.items()}
+    if held != actual:
+        out.append(f"positions implied by log {held} != actual {actual}")
+
+    j_total = sum((x.get("pnl") or 0) for x in journal)
+    out.append(f"--- journal ({len(journal)} closed trades, ${j_total:.2f}) vs "
+               f"log SELL realized ${realized_log:.2f} ---")
+    sells = [t for t in trades if t.get("side") == "SELL"]
+    for x in journal:
+        match = [t for t in sells if t.get("symbol") == x.get("symbol")
+                 and abs((t.get("price") or 0) - (x.get("exit_price") or 0)) < 0.01]
+        calc = round(((x.get("exit_price") or 0) - (x.get("entry_price") or 0)) * (x.get("qty") or 0), 2)
+        flags = []
+        if not match:
+            flags.append("NO matching SELL in trade log")
+        if x.get("pnl") is not None and abs(calc - x["pnl"]) > 0.05:
+            flags.append(f"pnl {x['pnl']} != qty x price move {calc}")
+        out.append(f"{x.get('symbol'):6} x{x.get('qty')} {x.get('entry_price')} -> {x.get('exit_price')}"
+                   f"  pnl {x.get('pnl')}  entry {x.get('entry_ts')} exit {x.get('exit_ts')}"
+                   + (f"   <-- {'; '.join(flags)}" if flags else ""))
+    for t in sells:
+        if not any(x.get("symbol") == t.get("symbol") and abs((x.get("exit_price") or 0) - (t.get("price") or 0)) < 0.01
+                   for x in journal):
+            out.append(f"log SELL {t.get('symbol')} @ {t.get('price')} ({t.get('ts')}) has no journal entry")
+    out.append("--- open positions ---")
+    for k, p in positions.items():
+        out.append(f"{k:6} x{p['qty']} @ {p['avg_price']}  entry {p.get('entry_ts')}")
+    return out
+
 # --------------------------------------------------------------------------
 # State persistence (paper portfolio)
 # --------------------------------------------------------------------------
@@ -1078,6 +1134,9 @@ def main():
                     help="seconds between cycles in --loop mode")
     ap.add_argument("--status", action="store_true",
                     help="print current paper portfolio and exit")
+    ap.add_argument("--audit", action="store_true",
+                    help="READ-ONLY: reconcile the paper account (trade log vs "
+                         "cash, positions and journal) and exit")
     ap.add_argument("--journal", action="store_true",
                     help="print the paper trade journal (closed trades + "
                          "lessons + win rate) and exit")
@@ -1143,6 +1202,11 @@ def main():
             "mode": cfg.mode, "cash": broker.get_cash(),
             "positions": broker.get_positions(),
         }, indent=2))
+        return
+
+    if args.audit:
+        for line in audit_report(getattr(broker, "state", {}), cfg.starting_cash):
+            print(line)
         return
 
     if args.journal:
