@@ -23,6 +23,10 @@ on:
         description: 'Add missing journal entries from the trade log (journal only)'
         type: boolean
         default: false
+      sell_symbol:
+        description: 'Sell this paper position now (market hours only), instead of trading'
+        type: string
+        default: ''
 
 jobs:
   paper-trade:
@@ -52,8 +56,11 @@ jobs:
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
+          SELL_SYMBOL:   ${{ github.event.inputs.sell_symbol }}
         run: |
-          if [ "${{ github.event.inputs.repair_journal }}" = "true" ]; then
+          if [ -n "$SELL_SYMBOL" ]; then
+            python auto_trader.py --sell "$SELL_SYMBOL"
+          elif [ "${{ github.event.inputs.repair_journal }}" = "true" ]; then
             python auto_trader.py --repair-journal
           elif [ "${{ github.event.inputs.audit }}" = "true" ]; then
             python auto_trader.py --audit
