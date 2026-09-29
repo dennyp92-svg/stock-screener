@@ -348,6 +348,17 @@ def ai_postmortem(record: dict) -> Optional[str]:
         return None
 
 
+def market_is_open(now=None) -> bool:
+    """True during the regular US session: weekdays 9:30-16:00 New York time.
+    Exchange holidays are not modelled."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now = (now or datetime.now(ZoneInfo("UTC"))).astimezone(ZoneInfo("America/New_York"))
+    if now.weekday() >= 5:
+        return False
+    minutes = now.hour * 60 + now.minute
+    return 9 * 60 + 30 <= minutes < 16 * 60
+
 def get_bars_since(ticker: str, since_epoch: float) -> Optional[list]:
     """5-minute regular-session bars that end after `since_epoch`, oldest
     first, as [(open, high, low)]. Returns None if the download fails."""
@@ -675,18 +686,19 @@ class PaperBroker(Broker):
         pnl_pct = round((price / avg - 1) * 100, 2) if avg else 0.0
         self.state["cash"] += proceeds
         pos["qty"] -= qty
-        closed_record = None
+        # Every sale is journaled (partial sells too), so the journal always
+        # adds up to the realized P&L in the trade log.
+        closed_record = {
+            "symbol": symbol, "qty": qty,
+            "entry_price": avg, "entry_ts": pos.get("entry_ts"),
+            "entry_meta": pos.get("entry_meta", {}),
+            "exit_price": round(price, 4),
+            "exit_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "exit_reason": exit_reason, "pnl": realized, "pnl_pct": pnl_pct,
+            "lesson": None,
+        }
+        self.state.setdefault("journal", []).append(closed_record)
         if pos["qty"] == 0:
-            closed_record = {
-                "symbol": symbol, "qty": qty,
-                "entry_price": avg, "entry_ts": pos.get("entry_ts"),
-                "entry_meta": pos.get("entry_meta", {}),
-                "exit_price": round(price, 4),
-                "exit_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "exit_reason": exit_reason, "pnl": realized, "pnl_pct": pnl_pct,
-                "lesson": None,
-            }
-            self.state.setdefault("journal", []).append(closed_record)
             del self.state["positions"][symbol]
         self._log("SELL", symbol, qty, price, realized)
         self._save()
@@ -1049,6 +1061,11 @@ class Engine:
     def run_once(self):
         cfg = self.cfg
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] run_once mode={cfg.mode}")
+        if not market_is_open():
+            # Outside the session prices are stale: no entries, no exits.
+            print("  market closed (weekdays 9:30-16:00 New York) - no trading this cycle")
+            return {"cash": self.broker.get_cash(), "positions": self.broker.get_positions(),
+                    "skipped": "market closed"}
 
         # 1. Snapshot the universe
         snapshots = {}

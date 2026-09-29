@@ -26,6 +26,12 @@ mode and a gated **live** (Webull) mode.
      is enforced between cycles and overnight. On take-profit the engine cancels
      that stop first and does not sell if the cancel fails.
 
+**Market hours:** every cycle — CLI, scheduled workflow or the app's "Run one
+paper cycle" button — does nothing outside the regular session (weekdays
+9:30–16:00 New York time), because snapshot prices are stale then. Exchange
+holidays are not modelled. Every sale, full or partial, is written to the
+journal, so the journal always adds up to the trade log's realized P&L.
+
 ## Run it (paper mode — default, no real money)
 
 ```bash

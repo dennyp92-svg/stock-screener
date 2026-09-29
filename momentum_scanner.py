@@ -870,14 +870,20 @@ with tab3:
     if st.button("▶️ Run one paper cycle now", use_container_width=True):
         run_cfg = at.Config()
         run_cfg.use_ai_confirmation = at_use_ai
+        refresh = False
         with st.spinner("Running paper cycle (scanning market)..."):
             try:
                 run_broker = at.PaperBroker(run_cfg)   # paper only — the UI never places live orders
-                at.Engine(run_cfg, run_broker).run_once()
-                st.success("Cycle complete.")
+                res = at.Engine(run_cfg, run_broker).run_once()
+                if res.get("skipped"):
+                    st.warning("Market is closed (weekdays 9:30 AM-4:00 PM New York) "
+                               "- no trades were placed.")
+                else:
+                    refresh = True
             except Exception as e:
                 st.error(f"Cycle failed: {e}")
-        st.rerun()
+        if refresh:
+            st.rerun()
 
     st.caption("Paper state is stored in Supabase when SUPABASE_URL/SUPABASE_KEY are set "
                "(shared with any CLI/scheduled runner and durable across redeploys); "
