@@ -10,3 +10,4 @@ auto_trade_state.json.tmp
 .webull_app_secret
 .auto_trade_day.json
 conf/
+.auto_trade_stops.json
