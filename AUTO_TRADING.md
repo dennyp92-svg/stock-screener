@@ -16,6 +16,15 @@ mode and a gated **live** (Webull) mode.
    max number of concurrent positions.
 5. **Manage exits** — each open position is closed on a **stop-loss** or
    **take-profit**. A **daily loss limit** halts new entries after a bad day.
+   - **Paper:** each cycle replays every 5-minute bar since the last check, so
+     exits fill where resting orders would have: at the stop / target price, or
+     at the bar's open if price gapped through it (stop assumed first when one
+     bar touches both). Positions opened before this existed are checked on the
+     next cycle's price once, then switch to bar replay.
+   - **Live:** a GTC `STOP_LOSS` sell order rests at Webull for every open
+     position (tracked in `.auto_trade_stops.json`, git-ignored), so the stop
+     is enforced between cycles and overnight. On take-profit the engine cancels
+     that stop first and does not sell if the cancel fails.
 
 ## Run it (paper mode — default, no real money)
 
@@ -23,7 +32,13 @@ mode and a gated **live** (Webull) mode.
 python auto_trader.py --once       # one cycle
 python auto_trader.py --loop --interval 300   # every 5 minutes
 python auto_trader.py --status     # print the paper portfolio
+python auto_trader.py --journal    # closed trades, win rate, and a QQQ comparison
 ```
+
+`--journal` ends with a benchmark: the account's return (realized + open
+positions at the latest close) versus buying QQQ on the day of the first entry,
+plus how each closed trade did versus QQQ over the same days (daily closes, so
+approximate).
 
 Paper state persists in `auto_trade_state.json` (git-ignored).
 
@@ -123,7 +138,11 @@ cannot run live end-to-end on unverified data.
 4. **Only then** consider letting the Engine place orders automatically — and
    even then, keep the position size, stop-loss, and daily-loss limits tight.
 
-Orders are LIMIT orders at the engine's reference price by default.
+Orders are LIMIT orders at the engine's reference price by default. The
+protective stop is a `STOP_LOSS` / `GTC` sell order built from Webull's
+documented example; like all orders it is only sent when
+`WEBULL_ARM_LIVE_ORDERS=YES`. Before relying on it, place one stop by hand at
+the smallest size and confirm it shows in Webull as a working GTC stop.
 
 ## Dependencies
 

@@ -348,6 +348,99 @@ def ai_postmortem(record: dict) -> Optional[str]:
         return None
 
 
+def get_bars_since(ticker: str, since_epoch: float) -> Optional[list]:
+    """5-minute regular-session bars that end after `since_epoch`, oldest
+    first, as [(open, high, low)]. Returns None if the download fails."""
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(ticker).history(period="5d", interval="5m")
+        hist = hist.dropna(subset=["Open", "High", "Low"])
+    except Exception:
+        return None
+    return [(float(r["Open"]), float(r["High"]), float(r["Low"]))
+            for ts, r in hist.iterrows() if ts.timestamp() + 300 > since_epoch]
+
+
+def resting_exit(bars: list, stop: float, target: float):
+    """Where a resting stop-loss / take-profit pair would have filled across
+    `bars`. A gap through either level fills at the bar's open; when one bar
+    touches both levels the stop is assumed first (conservative).
+    Returns (fill_price, reason) or None."""
+    for o, h, l in bars:
+        if o <= stop:
+            return o, "STOP-LOSS"
+        if o >= target:
+            return o, "TAKE-PROFIT"
+        if l <= stop:
+            return stop, "STOP-LOSS"
+        if h >= target:
+            return target, "TAKE-PROFIT"
+    return None
+
+
+def _close_on(series, day):
+    """Last close on or before `day` (a date) from a yfinance Close series."""
+    import pandas as pd
+    idx = series.index.tz_localize(None) if series.index.tz is not None else series.index
+    prior = series[idx.normalize() <= pd.Timestamp(day)]
+    return float(prior.iloc[-1]) if len(prior) else None
+
+
+def benchmark_report(state: dict, symbol: str = "QQQ") -> list:
+    """Compare the paper account with simply holding `symbol` over the same
+    period, and each closed trade with `symbol` over that trade's holding
+    window (daily closes, so per-trade figures are approximate)."""
+    import pandas as pd
+    import yfinance as yf
+    journal = state.get("journal", [])
+    positions = state.get("positions", {})
+    days = sorted(str(x.get("entry_ts"))[:10] for x in
+                  list(journal) + list(positions.values()) if x.get("entry_ts"))
+    if not days:
+        return []
+    first = pd.Timestamp(days[0]).date()
+    start = (pd.Timestamp(first) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+    bench = yf.Ticker(symbol).history(start=start)["Close"].dropna()
+    b0 = _close_on(bench, first)
+    if not b0 or bench.empty:
+        return [f"(could not load {symbol} prices for the benchmark)"]
+
+    # Starting cash = cash now + cost of open positions - all realized P&L.
+    realized = sum((t.get("realized") or 0) for t in state.get("trades", [])
+                   if t.get("side") == "SELL")
+    cost = sum(p["qty"] * p["avg_price"] for p in positions.values())
+    start_cash = state.get("cash", 0.0) + cost - realized
+    unrealized, missing = 0.0, []
+    for sym, p in positions.items():
+        h = yf.Ticker(sym).history(period="5d")["Close"].dropna()
+        if h.empty:
+            missing.append(sym)
+            continue
+        unrealized += (float(h.iloc[-1]) - p["avg_price"]) * p["qty"]
+    equity = start_cash + realized + unrealized
+    acct = (equity / start_cash - 1) * 100 if start_cash else 0.0
+    bret = (float(bench.iloc[-1]) / b0 - 1) * 100
+
+    lines = [f"=== vs {symbol} (since first entry {first}) ===",
+             f"account: {acct:+.2f}%  (realized ${realized:.2f}, "
+             f"open positions ${unrealized:+.2f})",
+             f"{symbol} buy-and-hold: {bret:+.2f}%  ->  difference "
+             f"{acct - bret:+.2f} pts"]
+    if missing:
+        lines.append(f"(no price for {', '.join(missing)}; excluded from open P&L)")
+    excess = []
+    for x in journal:
+        q0 = _close_on(bench, pd.Timestamp(str(x.get("entry_ts"))[:10]).date())
+        q1 = _close_on(bench, pd.Timestamp(str(x.get("exit_ts"))[:10]).date())
+        if q0 and q1 and x.get("pnl_pct") is not None:
+            excess.append(x["pnl_pct"] - (q1 / q0 - 1) * 100)
+    if excess:
+        lines.append(f"closed trades: avg {sum(excess) / len(excess):+.2f} pts "
+                     f"better than {symbol} over the same days "
+                     f"({sum(e > 0 for e in excess)}/{len(excess)} beat it)")
+    return lines
+
+
 # --------------------------------------------------------------------------
 # State persistence (paper portfolio)
 # --------------------------------------------------------------------------
@@ -487,6 +580,9 @@ class PaperBroker(Broker):
                 "qty": qty, "avg_price": round(price, 4),
                 "entry_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "entry_meta": entry_meta or {},
+                # bars after this moment are checked against the resting
+                # stop / take-profit on the next cycle
+                "checked_at": time.time(),
             }
         self._log("BUY", symbol, qty, price)
         self._save()
@@ -652,19 +748,56 @@ class WebullBroker(Broker):
             "entrust_type": "QTY",
         }
 
-    def _place(self, symbol: str, qty: int, price: float, side: str) -> dict:
+    def _build_stop_order(self, symbol: str, qty: int, stop_price: float) -> dict:
+        """Protective sell stop, resting at the broker until filled or
+        cancelled (GTC), per Webull's STOP_LOSS order example."""
+        import uuid
+        return {
+            "combo_type": "NORMAL",
+            "client_order_id": uuid.uuid4().hex,
+            "symbol": symbol,
+            "instrument_type": "EQUITY",
+            "market": os.getenv("WEBULL_MARKET", "US"),
+            "order_type": "STOP_LOSS",
+            "stop_price": f"{stop_price:.2f}",
+            "quantity": str(int(qty)),
+            "support_trading_session": "CORE",
+            "side": "SELL",
+            "time_in_force": "GTC",
+            "entrust_type": "QTY",
+        }
+
+    @staticmethod
+    def _require_armed():
         if os.getenv("WEBULL_ARM_LIVE_ORDERS", "").strip().upper() != "YES":
             raise RuntimeError(
                 "Live orders are DISARMED. Set WEBULL_ARM_LIVE_ORDERS=YES only "
                 "after a successful --webull-test and a manual smallest-size "
                 "test order."
             )
-        order = self._build_order(symbol, qty, price, side)
+
+    def _submit(self, order: dict) -> dict:
+        self._require_armed()
         res = self._client().order_v3.place_order(self.account_id, [order])
         ok = getattr(res, "status_code", None) == 200
         body = res.json() if hasattr(res, "json") else res
-        return {"ok": ok, "symbol": symbol, "qty": qty, "price": price,
-                "side": side, "response": body}
+        return {"ok": ok, "response": body}
+
+    def _place(self, symbol: str, qty: int, price: float, side: str) -> dict:
+        r = self._submit(self._build_order(symbol, qty, price, side))
+        return {**r, "symbol": symbol, "qty": qty, "price": price, "side": side}
+
+    def place_stop(self, symbol: str, qty: int, stop_price: float) -> dict:
+        order = self._build_stop_order(symbol, qty, stop_price)
+        r = self._submit(order)
+        return {**r, "symbol": symbol, "qty": qty, "stop": stop_price,
+                "client_order_id": order["client_order_id"]}
+
+    def cancel(self, client_order_id: str) -> dict:
+        self._require_armed()
+        res = self._client().order_v3.cancel_order(self.account_id, client_order_id)
+        body = res.json() if hasattr(res, "json") else res
+        return {"ok": getattr(res, "status_code", None) == 200, "response": body}
 
     def buy(self, symbol: str, qty: int, price: float, entry_meta: dict = None) -> dict:
         return self._place(symbol, qty, price, "BUY")  # entry_meta unused live
@@ -685,9 +818,58 @@ class Engine:
     def _price_lookup(self, snapshots: dict) -> dict:
         return {t: d["price"] for t, d in snapshots.items() if d}
 
+    _STOPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               ".auto_trade_stops.json")
+
+    def _sync_protective_stops(self) -> dict:
+        """Live only: keep one resting broker stop-loss per open position.
+        Returns {symbol: {client_order_id, stop, qty}} for stops in place."""
+        try:
+            with open(self._STOPS_FILE) as f:
+                stops = json.load(f)
+        except Exception:
+            stops = {}
+        positions = self.broker.get_positions()
+        for sym in list(stops):
+            if sym not in positions:        # stop filled or position sold
+                del stops[sym]
+        for sym, pos in positions.items():
+            if sym in stops:
+                continue
+            qty = int(pos["qty"])
+            if qty < 1:
+                continue
+            stop_px = round(pos["avg_price"] * (1 - self.cfg.stop_loss_pct), 2)
+            try:
+                r = self.broker.place_stop(sym, qty, stop_px)
+            except Exception as e:
+                print(f"  could not place protective stop for {sym}: {e}")
+                continue
+            if r.get("ok"):
+                stops[sym] = {"client_order_id": r["client_order_id"],
+                              "stop": stop_px, "qty": qty}
+                print(f"  protective STOP placed {sym} x{qty} @ {stop_px}")
+            else:
+                print(f"  protective stop REJECTED for {sym}: {r.get('response')}")
+        try:
+            with open(self._STOPS_FILE, "w") as f:
+                json.dump(stops, f)
+        except Exception:
+            pass
+        return stops
+
     def _manage_open_positions(self, snapshots: dict):
         """Close positions that hit their stop-loss or take-profit, and write a
-        journal post-mortem for each closed trade."""
+        journal post-mortem for each closed trade.
+
+        Paper: every 5-minute bar since the last check is tested against the
+        levels, so fills match what resting orders would have done (a stop
+        fills at the stop, or at the open on a gap) instead of at whatever the
+        price is when the next cycle happens to run.
+        Live: the stop-loss rests at the broker; this loop only takes profit
+        (cancelling the resting stop first)."""
+        paper = isinstance(self.broker, PaperBroker)
+        stops = self._sync_protective_stops() if hasattr(self.broker, "place_stop") else {}
         for symbol, pos in list(self.broker.get_positions().items()):
             d = snapshots.get(symbol)
             if not d:
@@ -697,10 +879,33 @@ class Engine:
             stop = avg * (1 - self.cfg.stop_loss_pct)
             target = avg * (1 + self.cfg.take_profit_pct)
             reason = None
-            if price <= stop:
+            bars = get_bars_since(symbol, pos["checked_at"]) if paper and pos.get("checked_at") else None
+            if bars is not None:
+                hit = resting_exit(bars, stop, target)
+                if hit:
+                    price, reason = hit
+            elif price <= stop and symbol not in stops:
                 reason = "STOP-LOSS"
             elif price >= target:
                 reason = "TAKE-PROFIT"
+            if paper and not reason and (bars is not None or not pos.get("checked_at")):
+                pos["checked_at"] = time.time()
+                self.broker._save()
+            if reason and symbol in stops:
+                try:
+                    c = self.broker.cancel(stops[symbol]["client_order_id"])
+                except Exception as e:
+                    c = {"ok": False, "response": str(e)}
+                if not c.get("ok"):
+                    print(f"  could not cancel resting stop for {symbol}, "
+                          f"not selling this cycle: {c.get('response')}")
+                    continue
+                del stops[symbol]
+                try:
+                    with open(self._STOPS_FILE, "w") as f:
+                        json.dump(stops, f)
+                except Exception:
+                    pass
             if reason:
                 r = self.broker.sell(symbol, pos["qty"], price, exit_reason=reason)
                 print(f"  {reason} {symbol} @ {price} (avg {avg}) "
@@ -938,6 +1143,11 @@ def main():
         print(f"--- open positions ({len(pos)}): "
               f"{', '.join(pos.keys()) if pos else 'none'} ---")
         print(f"cash=${broker.get_cash()}")
+        try:
+            for line in benchmark_report(state):
+                print(line)
+        except Exception as e:
+            print(f"(benchmark unavailable: {e})")
         return
 
     engine = Engine(cfg, broker)
