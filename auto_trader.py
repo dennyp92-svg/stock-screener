@@ -397,7 +397,7 @@ def benchmark_report(state: dict, symbol: str = "QQQ") -> list:
     days = sorted(str(x.get("entry_ts"))[:10] for x in
                   list(journal) + list(positions.values()) if x.get("entry_ts"))
     if not days:
-        return []
+        return [f"(no entry times recorded yet, so no {symbol} comparison)"]
     first = pd.Timestamp(days[0]).date()
     start = (pd.Timestamp(first) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
     bench = yf.Ticker(symbol).history(start=start)["Close"].dropna()
@@ -428,16 +428,23 @@ def benchmark_report(state: dict, symbol: str = "QQQ") -> list:
              f"{acct - bret:+.2f} pts"]
     if missing:
         lines.append(f"(no price for {', '.join(missing)}; excluded from open P&L)")
-    excess = []
+    excess, undated = [], 0
     for x in journal:
-        q0 = _close_on(bench, pd.Timestamp(str(x.get("entry_ts"))[:10]).date())
-        q1 = _close_on(bench, pd.Timestamp(str(x.get("exit_ts"))[:10]).date())
-        if q0 and q1 and x.get("pnl_pct") is not None:
+        if not (x.get("entry_ts") and x.get("exit_ts")) or x.get("pnl_pct") is None:
+            undated += 1
+            continue
+        q0 = _close_on(bench, pd.Timestamp(str(x["entry_ts"])[:10]).date())
+        q1 = _close_on(bench, pd.Timestamp(str(x["exit_ts"])[:10]).date())
+        if q0 and q1:
             excess.append(x["pnl_pct"] - (q1 / q0 - 1) * 100)
     if excess:
         lines.append(f"closed trades: avg {sum(excess) / len(excess):+.2f} pts "
                      f"better than {symbol} over the same days "
                      f"({sum(e > 0 for e in excess)}/{len(excess)} beat it)")
+    if undated:
+        lines.append(f"({undated} closed trade(s) have no recorded entry/exit "
+                     f"time: they are left out of the per-trade comparison, and "
+                     f"the {symbol} start date may be later than your first trade)")
     return lines
 
 
