@@ -386,18 +386,25 @@ def _close_on(series, day):
     return float(prior.iloc[-1]) if len(prior) else None
 
 
-def benchmark_report(state: dict, symbol: str = "QQQ") -> list:
+def benchmark_report(state: dict, starting_cash: float, symbol: str = "QQQ") -> list:
     """Compare the paper account with simply holding `symbol` over the same
     period, and each closed trade with `symbol` over that trade's holding
-    window (daily closes, so per-trade figures are approximate)."""
+    window (daily closes, so per-trade figures are approximate).
+
+    Uses the account's recorded starting cash and start date when present
+    (`starting_cash`, `started`); otherwise `starting_cash` and the earliest
+    timestamp found in the journal, positions or trade log."""
     import pandas as pd
     import yfinance as yf
     journal = state.get("journal", [])
     positions = state.get("positions", {})
-    days = sorted(str(x.get("entry_ts"))[:10] for x in
-                  list(journal) + list(positions.values()) if x.get("entry_ts"))
+    start_cash = float(state.get("starting_cash") or starting_cash)
+    stamps = [state.get("started")]
+    stamps += [x.get("entry_ts") for x in list(journal) + list(positions.values())]
+    stamps += [t.get("ts") for t in state.get("trades", [])]
+    days = sorted(str(d)[:10] for d in stamps if d)
     if not days:
-        return [f"(no entry times recorded yet, so no {symbol} comparison)"]
+        return [f"(no dates recorded yet, so no {symbol} comparison)"]
     first = pd.Timestamp(days[0]).date()
     start = (pd.Timestamp(first) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
     bench = yf.Ticker(symbol).history(start=start)["Close"].dropna()
@@ -405,11 +412,10 @@ def benchmark_report(state: dict, symbol: str = "QQQ") -> list:
     if not b0 or bench.empty:
         return [f"(could not load {symbol} prices for the benchmark)"]
 
-    # Starting cash = cash now + cost of open positions - all realized P&L.
-    realized = sum((t.get("realized") or 0) for t in state.get("trades", [])
-                   if t.get("side") == "SELL")
+    # Equity from what the account actually holds: cash + open positions at
+    # the latest close (cost basis if a price is unavailable).
+    cash = float(state.get("cash", 0.0))
     cost = sum(p["qty"] * p["avg_price"] for p in positions.values())
-    start_cash = state.get("cash", 0.0) + cost - realized
     unrealized, missing = 0.0, []
     for sym, p in positions.items():
         h = yf.Ticker(sym).history(period="5d")["Close"].dropna()
@@ -417,15 +423,21 @@ def benchmark_report(state: dict, symbol: str = "QQQ") -> list:
             missing.append(sym)
             continue
         unrealized += (float(h.iloc[-1]) - p["avg_price"]) * p["qty"]
-    equity = start_cash + realized + unrealized
+    realized = cash + cost - start_cash
+    equity = cash + cost + unrealized
     acct = (equity / start_cash - 1) * 100 if start_cash else 0.0
     bret = (float(bench.iloc[-1]) / b0 - 1) * 100
 
-    lines = [f"=== vs {symbol} (since first entry {first}) ===",
+    lines = [f"=== vs {symbol} (since {first}, starting cash ${start_cash:,.0f}) ===",
              f"account: {acct:+.2f}%  (realized ${realized:.2f}, "
              f"open positions ${unrealized:+.2f})",
              f"{symbol} buy-and-hold: {bret:+.2f}%  ->  difference "
              f"{acct - bret:+.2f} pts"]
+    journal_realized = sum((x.get("pnl") or 0) for x in journal)
+    if abs(journal_realized - realized) > 1:
+        lines.append(f"(journal lists ${journal_realized:.2f} realized; the "
+                     f"${realized - journal_realized:+.2f} gap is trades missing "
+                     f"from the journal or a different starting cash)")
     if missing:
         lines.append(f"(no price for {', '.join(missing)}; excluded from open P&L)")
     excess, undated = [], 0
@@ -454,7 +466,9 @@ def benchmark_report(state: dict, symbol: str = "QQQ") -> list:
 
 def _default_state(starting_cash: float) -> dict:
     return {"cash": starting_cash, "positions": {}, "trades": [],
-            "day": None, "day_start_equity": None}
+            "day": None, "day_start_equity": None,
+            "starting_cash": starting_cash,
+            "started": time.strftime("%Y-%m-%d %H:%M:%S")}
 
 
 class StateStore(ABC):
@@ -1151,7 +1165,7 @@ def main():
               f"{', '.join(pos.keys()) if pos else 'none'} ---")
         print(f"cash=${broker.get_cash()}")
         try:
-            for line in benchmark_report(state):
+            for line in benchmark_report(state, cfg.starting_cash):
                 print(line)
         except Exception as e:
             print(f"(benchmark unavailable: {e})")
