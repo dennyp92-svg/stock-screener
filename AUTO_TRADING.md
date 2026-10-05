@@ -102,6 +102,19 @@ verified calls (`account_v2.get_account_list`, `account_v2.get_account_balance`,
 intentionally raises until you complete the checklist below, so the Engine
 cannot run live end-to-end on unverified data.
 
+### Live state must be durable (CI / scheduled runs)
+
+Live mode keeps two pieces of bookkeeping between cycles: the ids of the
+resting protective stop orders, and the day's starting equity (the baseline for
+the daily loss limit). They are stored with the same backend as the paper state,
+in a separate row (`<AUTO_TRADE_STATE_ID>_live`, e.g. `paper_live`). With
+Supabase configured they survive separate runs, including ephemeral GitHub
+Actions runners. With the `file` backend they live in `.auto_trade_live_aux.json`
+(git-ignored), which a CI runner loses after every run, so live mode **refuses
+to start on CI (`GITHUB_ACTIONS`/`CI` set) unless Supabase is configured**.
+
+Offline tests for this: `python -m unittest tests.test_live_state -v`.
+
 ### Prerequisites
 
 - A Webull brokerage account is **not enough**. You need **Webull OpenAPI

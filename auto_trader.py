@@ -26,7 +26,7 @@ import json
 import math
 import time
 import argparse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -656,6 +656,30 @@ def build_state_store(cfg: Config) -> StateStore:
     return FileStateStore(cfg.state_file)  # backend == "auto", no creds
 
 
+_AUX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        ".auto_trade_live_aux.json")
+
+
+def build_aux_store(cfg: Config) -> StateStore:
+    """State store for LIVE-only bookkeeping: the resting protective-stop
+    order ids and the day's starting equity (for the daily loss limit).
+
+    Uses the same backend as the paper state but a separate row
+    (`<state_row_id>_live`), so with Supabase it survives separate process
+    runs - including ephemeral CI runners, which start with a blank disk."""
+    aux_cfg = dc_replace(cfg, state_row_id=f"{cfg.state_row_id}_live",
+                         state_file=_AUX_FILE)
+    return build_state_store(aux_cfg)
+
+
+def state_is_durable(cfg: Config) -> bool:
+    """True if state would be stored in Supabase (survives CI runs/redeploys)."""
+    if cfg.state_backend == "file":
+        return False
+    url, key = _supabase_creds()
+    return bool(url and key)
+
+
 # --------------------------------------------------------------------------
 # Broker abstraction
 # --------------------------------------------------------------------------
@@ -949,21 +973,34 @@ class Engine:
     def __init__(self, cfg: Config, broker: Broker):
         self.cfg = cfg.validate()
         self.broker = broker
+        self._aux_store = None
+
+    def _load_aux(self) -> dict:
+        """Live-only bookkeeping document: {"stops": {...}, "day": {...}}."""
+        if self._aux_store is None:
+            self._aux_store = build_aux_store(self.cfg)
+        aux = self._aux_store.load({"stops": {}, "day": {}})
+        aux.setdefault("stops", {})
+        aux.setdefault("day", {})
+        return aux
+
+    def _save_aux(self, aux: dict) -> None:
+        """Persist live bookkeeping. A failure here is NOT swallowed: losing
+        track of resting stops would make the next cycle place duplicates."""
+        try:
+            self._aux_store.save(aux)
+        except Exception as e:
+            print(f"  FATAL: could not persist live state: {e}")
+            raise
 
     def _price_lookup(self, snapshots: dict) -> dict:
         return {t: d["price"] for t, d in snapshots.items() if d}
 
-    _STOPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               ".auto_trade_stops.json")
-
     def _sync_protective_stops(self) -> dict:
         """Live only: keep one resting broker stop-loss per open position.
         Returns {symbol: {client_order_id, stop, qty}} for stops in place."""
-        try:
-            with open(self._STOPS_FILE) as f:
-                stops = json.load(f)
-        except Exception:
-            stops = {}
+        aux = self._load_aux()
+        stops = aux["stops"]
         positions = self.broker.get_positions()
         for sym in list(stops):
             if sym not in positions:        # stop filled or position sold
@@ -986,11 +1023,7 @@ class Engine:
                 print(f"  protective STOP placed {sym} x{qty} @ {stop_px}")
             else:
                 print(f"  protective stop REJECTED for {sym}: {r.get('response')}")
-        try:
-            with open(self._STOPS_FILE, "w") as f:
-                json.dump(stops, f)
-        except Exception:
-            pass
+        self._save_aux(aux)
         return stops
 
     def _manage_open_positions(self, snapshots: dict):
@@ -1005,6 +1038,7 @@ class Engine:
         (cancelling the resting stop first)."""
         paper = isinstance(self.broker, PaperBroker)
         stops = self._sync_protective_stops() if hasattr(self.broker, "place_stop") else {}
+        aux = self._load_aux() if stops else None
         for symbol, pos in list(self.broker.get_positions().items()):
             d = snapshots.get(symbol)
             if not d:
@@ -1036,11 +1070,8 @@ class Engine:
                           f"not selling this cycle: {c.get('response')}")
                     continue
                 del stops[symbol]
-                try:
-                    with open(self._STOPS_FILE, "w") as f:
-                        json.dump(stops, f)
-                except Exception:
-                    pass
+                aux["stops"] = stops
+                self._save_aux(aux)
             if reason:
                 r = self.broker.sell(symbol, pos["qty"], price, exit_reason=reason)
                 print(f"  {reason} {symbol} @ {price} (avg {avg}) "
@@ -1067,21 +1098,12 @@ class Engine:
                 state["day_start_equity"] = equity_now
                 self.broker._save()
             return state.get("day_start_equity") or equity_now
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            ".auto_trade_day.json")
-        data = {}
-        try:
-            with open(path) as f:
-                data = json.load(f)
-        except Exception:
-            pass
+        aux = self._load_aux()
+        data = aux["day"]
         if data.get("day") != today:
             data = {"day": today, "day_start_equity": equity_now}
-            try:
-                with open(path, "w") as f:
-                    json.dump(data, f)
-            except Exception:
-                pass
+            aux["day"] = data
+            self._save_aux(aux)
         return data.get("day_start_equity") or equity_now
 
     def _day_guard(self, equity_now: float) -> bool:
@@ -1184,6 +1206,14 @@ def build_broker(cfg: Config) -> Broker:
                 "I_UNDERSTAND_THE_RISK. Also verify credentials with "
                 "--webull-test and note orders stay disarmed until "
                 "WEBULL_ARM_LIVE_ORDERS=YES."
+            )
+        if not state_is_durable(cfg) and (os.getenv("GITHUB_ACTIONS") or os.getenv("CI")):
+            raise SystemExit(
+                "LIVE mode blocked: this looks like an ephemeral CI runner but "
+                "durable state is not configured. Live stop-order ids and the "
+                "daily-loss baseline would be lost every run (duplicate stops, "
+                "loss limit never trips). Set SUPABASE_URL / SUPABASE_KEY and "
+                "do not force AUTO_TRADE_STATE_BACKEND=file."
             )
         return WebullBroker(cfg)
     return PaperBroker(cfg)
