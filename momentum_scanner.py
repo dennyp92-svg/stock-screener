@@ -5,6 +5,7 @@ import os, json
 import smtplib
 from email.mime.text import MIMEText
 import auto_trader as at
+import rule_flow  # optional add-on: animated rule-flow tab (visualization only)
 
 def send_email_alert(to_email, subject, body):
     try:
@@ -329,7 +330,7 @@ with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
 
     st.caption("Live market discovery enabled - real movers pulled fresh each scan")
 
-tab1, tab2, tab3 = st.tabs(["📈 Scanner", "⭐ Watchlist", "🤖 Auto-Trader"])
+tab1, tab2, tab3, tab4 = st.tabs(["📈 Scanner", "⭐ Watchlist", "🤖 Auto-Trader", "🌌 Rule flow"])
 
 with tab1:
     if run:
@@ -350,6 +351,7 @@ with tab1:
             with ThreadPoolExecutor(max_workers=30) as executor:
                 all_data = list(executor.map(get_stock_data, tickers_to_scan))
             bar.empty()
+            st.session_state.all_scan_data = [d for d in all_data if d]  # raw rows for the Rule flow tab
 
             results = []
             for d in all_data:
@@ -888,3 +890,9 @@ with tab3:
     st.caption("Paper state is stored in Supabase when SUPABASE_URL/SUPABASE_KEY are set "
                "(shared with any CLI/scheduled runner and durable across redeploys); "
                "otherwise it falls back to a local auto_trade_state.json file.")
+
+# Rule flow tab: kept at the very end so it sees the scan that just ran above.
+with tab4:
+    rule_flow.render(st.session_state.get("all_scan_data"), min_price=min_price, max_price=max_price,
+                     min_change=min_change, max_change=max_change, min_vol_spike=min_vol_spike,
+                     min_volume=min_volume, min_rsi=min_rsi, max_rsi=max_rsi, gap_up_only=gap_up_only)
