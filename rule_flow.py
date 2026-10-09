@@ -17,6 +17,8 @@ Usage:
 from __future__ import annotations
 
 import json
+import random
+import math
 
 import streamlit as st
 
@@ -165,7 +167,7 @@ body.mx .pane,body.mx .btn{border-color:#0c3318}
       <h1>Rule flow</h1>
       <p class="sub">Your last scan, replayed. A hub visits clusters of tickers one filter at a time. Stocks that fail switch off in that filter's color; survivors get a green thread back to the hub. Visualization only, nothing here places trades.</p>
     </div>
-    <div class="badge">Your scan data</div>
+    <div class="badge" id="badge">Your scan data</div>
   </header>
 
   <div class="toolbar">
@@ -616,6 +618,7 @@ function begin(){
 }
 $('mxbtn').addEventListener('click',function(){MX=!MX;try{localStorage.setItem('rf_mx',MX?'1':'0')}catch(e){}body_mx()});
 $('replay').addEventListener('click',function(){if(reduce)settleAll();else startRun()});
+$('badge').textContent=DATA.label||'Your scan data';
 $('summary').textContent=passN+' of '+N+' tickers pass all '+NG+' rules';
 buildCode();buildStageRows();
 (function(){var h=$('seg');for(var k=0;k<=NG;k++){var i=document.createElement('i');i.innerHTML='<b style="background:'+(k<NG?RHEX[k]:'#3ddc9b')+'"></b>';h.appendChild(i)}})();
@@ -652,9 +655,32 @@ def _num(x):
         return None
 
 
+def sample_rows(n=200, seed=23):
+    """Invented tickers so the tab has something to show before the first scan."""
+    rnd = random.Random(seed)
+    sectors = ["Technology", "Healthcare", "Energy", "Financial Services",
+               "Consumer Cyclical", "Industrials", "Basic Materials", "Communication Services"]
+    used, rows = set(), []
+    while len(rows) < n:
+        t = "".join(rnd.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") for _ in range(rnd.choice([3, 4])))
+        if t in used:
+            continue
+        used.add(t)
+        chg = round(rnd.gauss(1.2, 4.2), 2)
+        price = min(1800.0, max(2.1, math.exp(rnd.gauss(math.log(55), 1.0))))
+        spike = min(6.0, max(0.3, math.exp(rnd.gauss(math.log(1.15 + 0.04 * abs(chg)), 0.45))))
+        rows.append({
+            "ticker": t, "price": price, "chg": chg, "vol_spike": round(spike, 2),
+            "vol": int(math.exp(rnd.gauss(math.log(1.4e6), 1.0)) * math.sqrt(spike)),
+            "rsi": min(95.0, max(8.0, 50 + 1.8 * chg + rnd.gauss(0, 10))),
+            "sector": rnd.choice(sectors), "is_gap_up": rnd.random() < 0.3,
+        })
+    return rows
+
+
 def build_payload(scan_data, *, min_price, max_price, min_change, max_change,
                   min_vol_spike, min_volume, min_rsi, max_rsi,
-                  gap_up_only=False) -> dict:
+                  gap_up_only=False, label="Your scan data") -> dict:
     """Turn raw scan rows + the current filter values into the JSON the page needs.
 
     The rules mirror the filter block in momentum_scanner.py, in this order:
@@ -696,7 +722,7 @@ def build_payload(scan_data, *, min_price, max_price, min_change, max_change,
     if gap_up_only:
         rules.append({"field": "gap", "name": "Gap up", "short": "GAP", "lo": None, "hi": None,
                       "fmt": "opened above prior close", "code": "if not is_gap_up:"})
-    return {"stocks": stocks, "rules": rules}
+    return {"stocks": stocks, "rules": rules, "label": label}
 
 
 def build_html(payload: dict) -> str:
@@ -709,13 +735,14 @@ def render(scan_data, *, min_price=30, max_price=500, min_change=1.0, max_change
            min_vol_spike=1.5, min_volume=1_000_000, min_rsi=48.0, max_rsi=75.0,
            gap_up_only=False, fallback_height=1500):
     """Draw the rule flow. Pass the raw (unfiltered) scan rows and the filter values."""
+    label = "Your scan data"
     if not scan_data:
-        st.info("Run a scan on the Scanner tab first. This view replays that scan.")
-        return
+        st.info("Showing sample data (invented tickers). Press Run Scan on the Scanner tab to see your own scan here.")
+        scan_data, label = sample_rows(), "Sample data \u00b7 invented tickers"
     payload = build_payload(
         scan_data, min_price=min_price, max_price=max_price, min_change=min_change,
         max_change=max_change, min_vol_spike=min_vol_spike, min_volume=min_volume,
-        min_rsi=min_rsi, max_rsi=max_rsi, gap_up_only=gap_up_only)
+        min_rsi=min_rsi, max_rsi=max_rsi, gap_up_only=gap_up_only, label=label)
     if not payload["stocks"]:
         st.warning("The last scan had no usable rows.")
         return
