@@ -165,7 +165,7 @@ body.mx .pane,body.mx .btn{border-color:#0c3318}
       <h1>Rule flow</h1>
       <p class="sub">Your last scan, replayed. A hub visits clusters of tickers one filter at a time. Stocks that fail switch off in that filter's color; survivors get a green thread back to the hub. Visualization only, nothing here places trades.</p>
     </div>
-    <div class="badge">Your scan data</div>
+    <div class="badge" id="badge">Your scan data</div>
   </header>
 
   <div class="toolbar">
@@ -616,6 +616,7 @@ function begin(){
 }
 $('mxbtn').addEventListener('click',function(){MX=!MX;try{localStorage.setItem('rf_mx',MX?'1':'0')}catch(e){}body_mx()});
 $('replay').addEventListener('click',function(){if(reduce)settleAll();else startRun()});
+$('badge').textContent=DATA.label||'Your scan data';
 $('summary').textContent=passN+' of '+N+' tickers pass all '+NG+' rules';
 buildCode();buildStageRows();
 (function(){var h=$('seg');for(var k=0;k<=NG;k++){var i=document.createElement('i');i.innerHTML='<b style="background:'+(k<NG?RHEX[k]:'#3ddc9b')+'"></b>';h.appendChild(i)}})();
@@ -707,10 +708,24 @@ def build_html(payload: dict) -> str:
 
 def render(scan_data, *, min_price=30, max_price=500, min_change=1.0, max_change=8.0,
            min_vol_spike=1.5, min_volume=1_000_000, min_rsi=48.0, max_rsi=75.0,
-           gap_up_only=False, fallback_height=1500):
-    """Draw the rule flow. Pass the raw (unfiltered) scan rows and the filter values."""
+           gap_up_only=False, scan_fn=None, fallback_height=1500):
+    """Draw the rule flow. Pass the raw (unfiltered) scan rows and the filter values.
+
+    scan_fn is an optional zero-argument function that fetches a fresh live scan and
+    returns the raw rows. When given, the tab gets its own scan button, so nobody has
+    to run a scan on the Scanner tab first.
+    """
+    if scan_fn is not None:
+        first = not scan_data
+        if st.button("Run live scan" if first else "Refresh live data", key="rule_flow_scan",
+                     type="primary" if first else "secondary"):
+            with st.spinner("Scanning live market data... this takes a minute"):
+                st.session_state.all_scan_data = scan_fn()
+            st.rerun()
     if not scan_data:
-        st.info("Run a scan on the Scanner tab first. This view replays that scan.")
+        st.info("Press **Run live scan** to replay a fresh scan of live market data here."
+                if scan_fn is not None else
+                "Run a scan on the Scanner tab first. This view replays that scan.")
         return
     payload = build_payload(
         scan_data, min_price=min_price, max_price=max_price, min_change=min_change,
