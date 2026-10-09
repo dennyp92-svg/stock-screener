@@ -892,7 +892,19 @@ with tab3:
                "otherwise it falls back to a local auto_trade_state.json file.")
 
 # Rule flow tab: kept at the very end so it sees the scan that just ran above.
+def _rule_flow_live_scan():
+    """Same live scan as the Scanner tab's Run Scan button, returned as raw rows."""
+    tickers = ALL_TICKERS
+    live = get_fmp_movers()
+    if live:
+        tickers = list(dict.fromkeys(live + ALL_TICKERS))
+    with ThreadPoolExecutor(max_workers=30) as executor:
+        all_rows = list(executor.map(get_stock_data, tickers))
+    return [d for d in all_rows if d]
+
+
 with tab4:
     rule_flow.render(st.session_state.get("all_scan_data"), min_price=min_price, max_price=max_price,
                      min_change=min_change, max_change=max_change, min_vol_spike=min_vol_spike,
-                     min_volume=min_volume, min_rsi=min_rsi, max_rsi=max_rsi, gap_up_only=gap_up_only)
+                     min_volume=min_volume, min_rsi=min_rsi, max_rsi=max_rsi, gap_up_only=gap_up_only,
+                     scan_fn=_rule_flow_live_scan)

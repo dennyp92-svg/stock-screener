@@ -17,8 +17,6 @@ Usage:
 from __future__ import annotations
 
 import json
-import random
-import math
 
 import streamlit as st
 
@@ -655,32 +653,9 @@ def _num(x):
         return None
 
 
-def sample_rows(n=200, seed=23):
-    """Invented tickers so the tab has something to show before the first scan."""
-    rnd = random.Random(seed)
-    sectors = ["Technology", "Healthcare", "Energy", "Financial Services",
-               "Consumer Cyclical", "Industrials", "Basic Materials", "Communication Services"]
-    used, rows = set(), []
-    while len(rows) < n:
-        t = "".join(rnd.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") for _ in range(rnd.choice([3, 4])))
-        if t in used:
-            continue
-        used.add(t)
-        chg = round(rnd.gauss(1.2, 4.2), 2)
-        price = min(1800.0, max(2.1, math.exp(rnd.gauss(math.log(55), 1.0))))
-        spike = min(6.0, max(0.3, math.exp(rnd.gauss(math.log(1.15 + 0.04 * abs(chg)), 0.45))))
-        rows.append({
-            "ticker": t, "price": price, "chg": chg, "vol_spike": round(spike, 2),
-            "vol": int(math.exp(rnd.gauss(math.log(1.4e6), 1.0)) * math.sqrt(spike)),
-            "rsi": min(95.0, max(8.0, 50 + 1.8 * chg + rnd.gauss(0, 10))),
-            "sector": rnd.choice(sectors), "is_gap_up": rnd.random() < 0.3,
-        })
-    return rows
-
-
 def build_payload(scan_data, *, min_price, max_price, min_change, max_change,
                   min_vol_spike, min_volume, min_rsi, max_rsi,
-                  gap_up_only=False, label="Your scan data") -> dict:
+                  gap_up_only=False) -> dict:
     """Turn raw scan rows + the current filter values into the JSON the page needs.
 
     The rules mirror the filter block in momentum_scanner.py, in this order:
@@ -722,7 +697,7 @@ def build_payload(scan_data, *, min_price, max_price, min_change, max_change,
     if gap_up_only:
         rules.append({"field": "gap", "name": "Gap up", "short": "GAP", "lo": None, "hi": None,
                       "fmt": "opened above prior close", "code": "if not is_gap_up:"})
-    return {"stocks": stocks, "rules": rules, "label": label}
+    return {"stocks": stocks, "rules": rules}
 
 
 def build_html(payload: dict) -> str:
@@ -733,16 +708,29 @@ def build_html(payload: dict) -> str:
 
 def render(scan_data, *, min_price=30, max_price=500, min_change=1.0, max_change=8.0,
            min_vol_spike=1.5, min_volume=1_000_000, min_rsi=48.0, max_rsi=75.0,
-           gap_up_only=False, fallback_height=1500):
-    """Draw the rule flow. Pass the raw (unfiltered) scan rows and the filter values."""
-    label = "Your scan data"
+           gap_up_only=False, scan_fn=None, fallback_height=1500):
+    """Draw the rule flow. Pass the raw (unfiltered) scan rows and the filter values.
+
+    scan_fn is an optional zero-argument function that fetches a fresh live scan and
+    returns the raw rows. When given, the tab gets its own scan button, so nobody has
+    to run a scan on the Scanner tab first.
+    """
+    if scan_fn is not None:
+        first = not scan_data
+        if st.button("Run live scan" if first else "Refresh live data", key="rule_flow_scan",
+                     type="primary" if first else "secondary"):
+            with st.spinner("Scanning live market data... this takes a minute"):
+                st.session_state.all_scan_data = scan_fn()
+            st.rerun()
     if not scan_data:
-        st.info("Showing sample data (invented tickers). Press Run Scan on the Scanner tab to see your own scan here.")
-        scan_data, label = sample_rows(), "Sample data \u00b7 invented tickers"
+        st.info("Press **Run live scan** to replay a fresh scan of live market data here."
+                if scan_fn is not None else
+                "Run a scan on the Scanner tab first. This view replays that scan.")
+        return
     payload = build_payload(
         scan_data, min_price=min_price, max_price=max_price, min_change=min_change,
         max_change=max_change, min_vol_spike=min_vol_spike, min_volume=min_volume,
-        min_rsi=min_rsi, max_rsi=max_rsi, gap_up_only=gap_up_only, label=label)
+        min_rsi=min_rsi, max_rsi=max_rsi, gap_up_only=gap_up_only)
     if not payload["stocks"]:
         st.warning("The last scan had no usable rows.")
         return
