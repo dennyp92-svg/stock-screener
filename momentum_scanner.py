@@ -233,7 +233,10 @@ def calc_rsi(prices, period=14):
 def get_stock_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info
+        try:
+            info = stock.info or {}
+        except Exception:
+            info = {}  # Yahoo may reject this call; keep going with price data only
         hist = stock.history(period="30d").dropna(subset=["Close"])
         if len(hist) >= 2:
             prev = float(hist["Close"].iloc[-2])
@@ -249,7 +252,16 @@ def get_stock_data(ticker):
             elif rec == "hold": rating = "HOLD"
             elif rec == "sell": rating = "SELL"
             else: rating = "N/A"
-            week52_high = info.get("fiftyTwoWeekHigh", 0)
+            week52_high = info.get("fiftyTwoWeekHigh") or 0
+            week52_low = info.get("fiftyTwoWeekLow") or 0
+            if not week52_high:
+                # info unavailable: fall back to a 1-year price history
+                try:
+                    h1y = stock.history(period="1y").dropna(subset=["Close"])
+                    week52_high = float(h1y["High"].max())
+                    week52_low = float(h1y["Low"].min())
+                except Exception:
+                    week52_high = 0
             pct_from_high = round(((week52_high - curr) / week52_high) * 100, 1) if week52_high > 0 else None
             today_high = float(hist["High"].iloc[-1])
             today_low = float(hist["Low"].iloc[-1])
@@ -272,7 +284,7 @@ def get_stock_data(ticker):
                 "vol": vol,
                 "avg_vol": avg_vol,
                 "high": week52_high,
-                "low": info.get("fiftyTwoWeekLow",0),
+                "low": week52_low,
                 "sector": info.get("sector","N/A"),
                 "rsi": rsi_val,
                 "pct_from_high": pct_from_high,
@@ -280,7 +292,8 @@ def get_stock_data(ticker):
                 "gap_pct": gap_pct,
                 "is_gap_up": is_gap_up
             }
-    except Exception: pass
+    except Exception as e:
+        print(f"get_stock_data failed for {ticker}: {e}")
     return None
 
 st.set_page_config(page_title="Stock Scanner Pro", page_icon="📈", layout="wide")
