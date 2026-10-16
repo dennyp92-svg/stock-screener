@@ -1189,6 +1189,52 @@ def build_broker(cfg: Config) -> Broker:
     return PaperBroker(cfg)
 
 
+def vol_filter_whatif(journal, thresholds=(1.0, 1.3, 1.5, 2.0)):
+    """READ-ONLY: on the closed trades that recorded an entry vol_spike, show
+    what a minimum-volume-spike filter would have kept vs dropped, and the P&L
+    and win rate of each side. Answers 'would turning the volume filter on have
+    helped?' using the real volume readings the bot saw at entry (which are the
+    intraday/partial values, so this reflects what the live filter would do)."""
+    withvol, novol = [], 0
+    for x in journal:
+        meta = x.get("entry_meta") or {}
+        vs, pnl = meta.get("vol_spike"), x.get("pnl")
+        try:
+            if vs is None or pnl is None:
+                novol += 1
+            else:
+                withvol.append((float(vs), float(pnl), x.get("symbol")))
+        except (TypeError, ValueError):
+            novol += 1
+
+    lines = ["=== VOLUME-FILTER WHAT-IF (real entry vol_spike per closed trade) ==="]
+    lines.append(f"{len(withvol)} trades have a recorded entry vol_spike; "
+                 f"{novol} do not (backfilled/old — excluded).")
+    if not withvol:
+        lines.append("no volume data to analyze.")
+        return lines
+
+    def stats(subset):
+        n = len(subset)
+        tot = round(sum(p for _, p, _ in subset), 2)
+        wins = sum(1 for _, p, _ in subset if p >= 0)
+        return n, tot, (round(100 * wins / n) if n else 0)
+
+    bn, btot, bwr = stats(withvol)
+    lines.append(f"baseline (filter OFF): {bn} trades | P&L ${btot} | win {bwr}%")
+    for th in thresholds:
+        kept = [t for t in withvol if t[0] >= th]
+        dropped = [t for t in withvol if t[0] < th]
+        kn, ktot, kwr = stats(kept)
+        dn, dtot, dwr = stats(dropped)
+        lines.append(
+            f"vol>={th}:  KEEP {kn} (P&L ${ktot}, win {kwr}%)  |  "
+            f"DROP {dn} (P&L ${dtot}, win {dwr}%)")
+    lines.append("(DROP P&L negative => the filter would have removed net losers "
+                 "= helps; positive => it removes net winners = hurts.)")
+    return lines
+
+
 def main():
     ap = argparse.ArgumentParser(description="Automated trading engine")
     ap.add_argument("--once", action="store_true", help="run a single cycle")
@@ -1332,6 +1378,11 @@ def main():
                 print(line)
         except Exception as e:
             print(f"(benchmark unavailable: {e})")
+        try:
+            for line in vol_filter_whatif(j):
+                print(line)
+        except Exception as e:
+            print(f"(vol what-if unavailable: {e})")
         return
 
     engine = Engine(cfg, broker)
