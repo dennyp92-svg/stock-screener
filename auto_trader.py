@@ -186,6 +186,13 @@ class Config:
     min_price: float = field(default_factory=lambda: _env_float("AUTO_TRADE_MIN_PRICE", 2.0))
     max_price: float = field(default_factory=lambda: _env_float("AUTO_TRADE_MAX_PRICE", 2000.0))
 
+    # Market-regime filter: only open NEW positions when regime_symbol's last
+    # close is above its N-day SMA (risk-on). Exits are never blocked. Off by
+    # default so existing deployments are unchanged.
+    regime_filter: bool = field(default_factory=lambda: _env_bool("AUTO_TRADE_REGIME_FILTER", False))
+    regime_symbol: str = field(default_factory=lambda: os.getenv("AUTO_TRADE_REGIME_SYMBOL", "QQQ").strip().upper())
+    regime_ma: int = field(default_factory=lambda: _env_int("AUTO_TRADE_REGIME_MA", 100))
+
     use_ai_confirmation: bool = field(default_factory=lambda: _env_bool("AUTO_TRADE_USE_AI", True))
     universe: list = field(default_factory=lambda: list(DEFAULT_UNIVERSE))
 
@@ -262,6 +269,35 @@ def get_stock_data(ticker: str) -> Optional[dict]:
 # --------------------------------------------------------------------------
 # Strategy: rule-based screen + optional AI confirmation
 # --------------------------------------------------------------------------
+
+def regime_ok(cfg: Config) -> bool:
+    """True when NEW entries are allowed by the market-regime filter: the
+    regime symbol's latest close is above its N-day SMA. Returns True when the
+    filter is off, and fails OPEN (allows entries, with a printed note) on any
+    data error so a glitch never silently freezes the strategy. Exits are
+    managed elsewhere and are never gated by this."""
+    if not cfg.regime_filter:
+        return True
+    try:
+        import yfinance as yf
+        n = cfg.regime_ma
+        period = "2y" if n > 180 else "1y"
+        closes = (yf.Ticker(cfg.regime_symbol).history(period=period)
+                  .dropna(subset=["Close"])["Close"])
+        if len(closes) < n:
+            print(f"  regime: not enough {cfg.regime_symbol} history "
+                  f"({len(closes)}<{n}); allowing entries")
+            return True
+        sma = float(closes.tail(n).mean())
+        last = float(closes.iloc[-1])
+        ok = last > sma
+        print(f"  regime {cfg.regime_symbol}: {last:.2f} vs SMA{n} {sma:.2f} -> "
+              f"{'RISK-ON' if ok else 'RISK-OFF (no new entries)'}")
+        return ok
+    except Exception as e:
+        print(f"  regime check failed ({e}); allowing entries")
+        return True
+
 
 def passes_rules(d: dict, cfg: Config) -> bool:
     if not d or d.get("price") is None:
@@ -1138,6 +1174,8 @@ class Engine:
         # 4. Entries
         open_syms = set(self.broker.get_positions().keys())
         slots = cfg.max_positions - len(open_syms)
+        if entries_allowed and slots > 0 and not regime_ok(cfg):
+            entries_allowed = False
         if entries_allowed and slots > 0:
             candidates = [d for t, d in snapshots.items()
                           if t not in open_syms and passes_rules(d, cfg)]
