@@ -62,6 +62,7 @@ Paper state persists in `auto_trade_state.json` (git-ignored).
 | `AUTO_TRADE_MIN_CHANGE` / `AUTO_TRADE_MAX_CHANGE` | `2` / `30` | entry % change band |
 | `AUTO_TRADE_MIN_VOL_SPIKE` | `1.5` | min volume spike (x normal) |
 | `AUTO_TRADE_MIN_RSI` / `AUTO_TRADE_MAX_RSI` | `50` / `75` | entry RSI band |
+| `AUTO_TRADE_REENTRY_COOLDOWN_DAYS` | `1` | after selling a symbol, don't buy it again for this many calendar days (`1` = not the same day, `2` = not today or tomorrow, `0` = off). Applies to every exit. |
 | `AUTO_TRADE_USE_AI` | `true` | require AI confirmation before buying |
 | `ANTHROPIC_KEY` | — | needed only if AI confirmation is on |
 | `AUTO_TRADE_STATE_BACKEND` | `auto` | `auto` (Supabase if creds set, else file), `supabase`, or `file` |

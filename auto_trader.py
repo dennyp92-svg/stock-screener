@@ -193,6 +193,12 @@ class Config:
     regime_symbol: str = field(default_factory=lambda: os.getenv("AUTO_TRADE_REGIME_SYMBOL", "QQQ").strip().upper())
     regime_ma: int = field(default_factory=lambda: _env_int("AUTO_TRADE_REGIME_MA", 100))
 
+    # Re-entry cooldown: after SELLING a symbol, do not BUY it again until this
+    # many calendar days have passed (1 = not again the same day, 2 = not today
+    # or tomorrow, 0 = off). Stops the bot selling and re-buying the same stock
+    # in back-to-back cycles. Applies to every exit (stop, target, manual).
+    reentry_cooldown_days: int = field(default_factory=lambda: _env_int("AUTO_TRADE_REENTRY_COOLDOWN_DAYS", 1))
+
     use_ai_confirmation: bool = field(default_factory=lambda: _env_bool("AUTO_TRADE_USE_AI", True))
     universe: list = field(default_factory=lambda: list(DEFAULT_UNIVERSE))
 
@@ -297,6 +303,21 @@ def regime_ok(cfg: Config) -> bool:
     except Exception as e:
         print(f"  regime check failed ({e}); allowing entries")
         return True
+
+
+def in_reentry_cooldown(last_sell_ts: Optional[str], now_ts: str, days: int) -> bool:
+    """True when a symbol sold at last_sell_ts must not be bought again at
+    now_ts. Both are 'YYYY-MM-DD HH:MM:SS' strings from the same clock; the
+    comparison is by calendar day, so days=1 blocks only the same day."""
+    from datetime import datetime
+    if days <= 0 or not last_sell_ts:
+        return False
+    try:
+        sold = datetime.strptime(last_sell_ts[:10], "%Y-%m-%d").date()
+        now = datetime.strptime(now_ts[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return False          # unreadable timestamp: never block on bad data
+    return (now - sold).days < days
 
 
 def passes_rules(d: dict, cfg: Config) -> bool:
@@ -709,6 +730,11 @@ class Broker(ABC):
     @abstractmethod
     def sell(self, symbol: str, qty: int, price: float, exit_reason: str = None) -> dict: ...
 
+    def last_sells(self) -> dict:
+        """symbol -> timestamp of its most recent SELL, for the re-entry
+        cooldown. Brokers that don't track this return {} (no cooldown)."""
+        return {}
+
     def equity(self, price_lookup: dict) -> float:
         total = self.get_cash()
         for sym, pos in self.get_positions().items():
@@ -732,6 +758,13 @@ class PaperBroker(Broker):
 
     def get_positions(self) -> dict:
         return self.state["positions"]
+
+    def last_sells(self) -> dict:
+        out = {}
+        for t in self.state.get("trades", []):
+            if t.get("side") == "SELL" and t.get("symbol") and t.get("ts"):
+                out[t["symbol"]] = t["ts"]      # trades are in time order
+        return out
 
     def buy(self, symbol: str, qty: int, price: float, entry_meta: dict = None) -> dict:
         cost = qty * price
@@ -1179,6 +1212,18 @@ class Engine:
         if entries_allowed and slots > 0:
             candidates = [d for t, d in snapshots.items()
                           if t not in open_syms and passes_rules(d, cfg)]
+            if cfg.reentry_cooldown_days > 0:
+                sold = self.broker.last_sells()
+                now_ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                kept = []
+                for d in candidates:
+                    if in_reentry_cooldown(sold.get(d["ticker"]), now_ts,
+                                           cfg.reentry_cooldown_days):
+                        print(f"  skip {d['ticker']}: sold {sold[d['ticker']]}, "
+                              f"re-entry cooldown {cfg.reentry_cooldown_days}d")
+                    else:
+                        kept.append(d)
+                candidates = kept
             candidates.sort(key=lambda x: x["chg"], reverse=True)
             for d in candidates:
                 if slots <= 0:
