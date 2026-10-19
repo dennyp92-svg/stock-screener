@@ -10,9 +10,10 @@ name: Auto-Trader (Paper v2 — cap+regime)
 # no Webull credentials, so it can only ever simulate.
 
 on:
-  schedule:
-    # Every 30 min, ~US market hours, weekdays — offset :15/:45 to interleave with v1.
-    - cron: '15,45 13-20 * * 1-5'
+  # PAUSED: the schedule is removed so v2 no longer runs on its own. To resume,
+  # restore this block:
+  #   schedule:
+  #     - cron: '15,45 13-20 * * 1-5'
   workflow_dispatch:
     inputs:
       report:

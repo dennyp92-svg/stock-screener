@@ -50,7 +50,7 @@ jobs:
           # and the momentum thresholds were too tight. Rules-only for now.
           AUTO_TRADE_USE_AI: 'false'
           AUTO_TRADE_MIN_CHANGE: '0.5'       # was 2.0
-          AUTO_TRADE_MIN_VOL_SPIKE: '1.0'    # require at/above avg volume; journal what-if showed thin-volume entries were the net losers
+          AUTO_TRADE_MIN_VOL_SPIKE: '0'      # off: intraday volume understates the spike
           AUTO_TRADE_MIN_RSI: '45'           # was 50
           AUTO_TRADE_MAX_RSI: '80'           # was 75
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
