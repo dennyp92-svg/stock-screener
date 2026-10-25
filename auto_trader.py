@@ -199,6 +199,16 @@ class Config:
     # in back-to-back cycles. Applies to every exit (stop, target, manual).
     reentry_cooldown_days: int = field(default_factory=lambda: _env_int("AUTO_TRADE_REENTRY_COOLDOWN_DAYS", 1))
 
+    # Earnings: a report can gap a stock past its stop overnight, so by default the
+    # bot does not BUY a stock with earnings in the next N calendar days (0 = off),
+    # and SELLS a held stock from earnings_exit_after_ct (Central time) on the
+    # trading day before its earnings date. FMP doesn't say whether a report is
+    # before the open or after the close, so the day before is the safe choice.
+    # If the earnings calendar can't be fetched, both checks are skipped that cycle.
+    earnings_skip_days: int = field(default_factory=lambda: _env_int("AUTO_TRADE_EARNINGS_SKIP_DAYS", 7))
+    earnings_exit: bool = field(default_factory=lambda: _env_bool("AUTO_TRADE_EARNINGS_EXIT", True))
+    earnings_exit_after_ct: str = field(default_factory=lambda: os.getenv("AUTO_TRADE_EARNINGS_EXIT_AFTER_CT", "14:00"))
+
     use_ai_confirmation: bool = field(default_factory=lambda: _env_bool("AUTO_TRADE_USE_AI", True))
     universe: list = field(default_factory=lambda: list(DEFAULT_UNIVERSE))
 
@@ -403,6 +413,65 @@ def ai_postmortem(record: dict) -> Optional[str]:
         return (msg.content[0].text or "").strip() or None
     except Exception:
         return None
+
+
+def earnings_dates(days_ahead: int, today=None) -> Optional[dict]:
+    """{symbol: 'YYYY-MM-DD'} - earliest earnings date from today to today+days_ahead,
+    from FMP's earnings calendar. None if there's no FMP_KEY or the call fails."""
+    from datetime import date, timedelta
+    key = _secret("FMP_KEY")
+    if not key:
+        return None
+    start = today or date.today()
+    end = start + timedelta(days=days_ahead)
+    try:
+        import requests
+        r = requests.get("https://financialmodelingprep.com/stable/earnings-calendar",
+                         params={"from": start.isoformat(), "to": end.isoformat(), "apikey": key},
+                         timeout=30)
+        r.raise_for_status()
+        rows = r.json()
+        if not isinstance(rows, list):
+            return None
+    except Exception as e:
+        print(f"  earnings calendar unavailable ({type(e).__name__}) - earnings checks off this cycle")
+        return None
+    out = {}
+    for row in rows:
+        s, d = row.get("symbol"), row.get("date")
+        if s and d and (s not in out or d < out[s]):
+            out[s] = d
+    return out
+
+
+def next_trading_day(d):
+    """Next weekday after d. Exchange holidays are not modelled (same as market_is_open)."""
+    from datetime import timedelta
+    d = d + timedelta(days=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
+def earnings_exit_due(earn_date: str, now_ct, after_ct: str = "14:00") -> bool:
+    """True if a stock with earnings on earn_date should be sold now: its earnings are
+    today or earlier (missed the window), or tomorrow-ish and it's past after_ct."""
+    if not earn_date:
+        return False
+    today = now_ct.date()
+    if earn_date <= today.isoformat():
+        return True
+    hh, mm = (int(x) for x in after_ct.split(":"))
+    return (earn_date <= next_trading_day(today).isoformat()
+            and (now_ct.hour, now_ct.minute) >= (hh, mm))
+
+
+def earnings_blocks_entry(earn_date: str, today, skip_days: int) -> bool:
+    """True if a stock's earnings fall within the next skip_days calendar days."""
+    from datetime import timedelta
+    if not earn_date or skip_days <= 0:
+        return False
+    return earn_date <= (today + timedelta(days=skip_days)).isoformat()
 
 
 def market_is_open(now=None) -> bool:
@@ -1122,6 +1191,32 @@ class Engine:
                         self.broker._save()
                         print(f"    lesson: {lesson}")
 
+    def _earnings_exits(self, snapshots: dict, earnings: dict, now_ct):
+        """Sell held positions whose earnings are due (see earnings_exit_due)."""
+        for symbol, pos in list(self.broker.get_positions().items()):
+            e = earnings.get(symbol)
+            d = snapshots.get(symbol)
+            if not d or not earnings_exit_due(e, now_ct, self.cfg.earnings_exit_after_ct):
+                continue
+            stops = self._sync_protective_stops() if hasattr(self.broker, "place_stop") else {}
+            if symbol in stops:
+                try:
+                    c = self.broker.cancel(stops[symbol]["client_order_id"])
+                except Exception as ex:
+                    c = {"ok": False, "response": str(ex)}
+                if not c.get("ok"):
+                    print(f"  could not cancel resting stop for {symbol}, not selling for earnings this cycle")
+                    continue
+            r = self.broker.sell(symbol, pos["qty"], d["price"], exit_reason=f"EARNINGS {e}")
+            print(f"  EARNINGS {symbol} (reports {e}) sold @ {d['price']} "
+                  f"P&L ${r.get('realized')} ({r.get('pnl_pct')}%)")
+            rec = r.get("closed_record")
+            if rec is not None:
+                lesson = ai_postmortem(rec)
+                if lesson:
+                    rec["lesson"] = lesson
+                    self.broker._save()
+
     def _day_start_equity(self, today: str, equity_now: float) -> float:
         """Return (and persist) the equity at the start of `today`.
 
@@ -1200,6 +1295,16 @@ class Engine:
         # 2. Manage exits first
         self._manage_open_positions(snapshots)
 
+        # 2b. Earnings: one calendar lookup per cycle, used for exits and entries
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now_ct = datetime.now(ZoneInfo("America/Chicago"))
+        earnings = {}
+        if cfg.earnings_exit or cfg.earnings_skip_days > 0:
+            earnings = earnings_dates(max(cfg.earnings_skip_days, 4), now_ct.date()) or {}
+        if cfg.earnings_exit and earnings:
+            self._earnings_exits(snapshots, earnings, now_ct)
+
         # 3. Daily loss guard
         equity = self.broker.equity(prices)
         entries_allowed = self._day_guard(equity)
@@ -1212,6 +1317,15 @@ class Engine:
         if entries_allowed and slots > 0:
             candidates = [d for t, d in snapshots.items()
                           if t not in open_syms and passes_rules(d, cfg)]
+            if earnings and cfg.earnings_skip_days > 0:
+                kept = []
+                for d in candidates:
+                    e = earnings.get(d["ticker"])
+                    if earnings_blocks_entry(e, now_ct.date(), cfg.earnings_skip_days):
+                        print(f"  skip {d['ticker']}: earnings {e} within {cfg.earnings_skip_days}d")
+                    else:
+                        kept.append(d)
+                candidates = kept
             if cfg.reentry_cooldown_days > 0:
                 sold = self.broker.last_sells()
                 now_ts = time.strftime("%Y-%m-%d %H:%M:%S")

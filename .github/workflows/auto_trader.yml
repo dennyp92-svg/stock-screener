@@ -56,6 +56,7 @@ jobs:
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
+          FMP_KEY:       ${{ secrets.FMP_KEY }}       # earnings calendar (skip/exit around earnings)
           SELL_SYMBOL:   ${{ github.event.inputs.sell_symbol }}
         run: |
           if [ -n "$SELL_SYMBOL" ]; then
