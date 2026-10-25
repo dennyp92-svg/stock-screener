@@ -1,0 +1,39 @@
+name: Catalyst Alerts
+
+# Weekday-morning Telegram warning about upcoming earnings for stocks the bots
+# hold or are watching, plus high-impact US economic events. Read-only.
+#
+# GitHub schedules run in UTC, so there are two: 12:30 UTC is 7:30 CT during
+# daylight saving (CDT) and 13:30 UTC is 7:30 CT in winter (CST). The script
+# only sends from the one that matches today's clock.
+
+on:
+  schedule:
+    - cron: '30 12 * * 1-5'
+    - cron: '30 13 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the message instead of sending it'
+        type: boolean
+        default: true
+
+jobs:
+  alerts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests supabase yfinance
+      - name: Check calendars and send alert
+        env:
+          FMP_KEY: ${{ secrets.FMP_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.CATALYST_TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CATALYST_TELEGRAM_CHAT_ID }}
+          SCHEDULE: ${{ github.event.schedule }}
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
+        run: python catalyst_alerts.py
