@@ -1,0 +1,52 @@
+name: Bot Watchdog
+
+# Checks every bot's health on weekdays and sends a Telegram alert when something
+# is wrong. Runs here on GitHub so it still works if the iMac or MacBook is asleep.
+# Three checks a day at 9:15 AM, 12:15 PM and 3:25 PM Central. GitHub schedules run in
+# UTC, so each check has two crons (summer CDT and winter CST); the script runs only the
+# one that matches today's clock. The 3:25 PM check always sends (all clear or problems).
+
+on:
+  schedule:
+    - cron: '15 14 * * 1-5'
+    - cron: '15 15 * * 1-5'
+    - cron: '15 17 * * 1-5'
+    - cron: '15 18 * * 1-5'
+    - cron: '25 20 * * 1-5'
+    - cron: '25 21 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: 'Which check to run'
+        type: choice
+        options: [close, morning, midday]
+        default: close
+      dry_run:
+        description: 'Print the message instead of sending it'
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Check bots
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.CATALYST_TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CATALYST_TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCHEDULE: ${{ github.event.schedule }}
+          SLOT: ${{ github.event_name == 'workflow_dispatch' && inputs.slot || '' }}
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
+        run: python bot_watchdog.py
