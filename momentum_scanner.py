@@ -343,7 +343,7 @@ with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
 
     st.caption("Live market discovery enabled - real movers pulled fresh each scan")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📈 Scanner", "⭐ Watchlist", "🤖 Auto-Trader", "🌌 Rule flow"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Scanner", "⭐ Watchlist", "🤖 Auto-Trader", "🌌 Rule flow", "🎯 Options"])
 
 with tab1:
     if run:
@@ -921,3 +921,8 @@ with tab4:
                      min_change=min_change, max_change=max_change, min_vol_spike=min_vol_spike,
                      min_volume=min_volume, min_rsi=min_rsi, max_rsi=max_rsi, gap_up_only=gap_up_only,
                      scan_fn=_rule_flow_live_scan)
+
+
+with tab5:
+    import options_tab
+    options_tab.render(_get_supabase)
