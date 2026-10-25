@@ -343,7 +343,7 @@ with st.expander("⚙️ Filters (tap to open/close)", expanded=True):
 
     st.caption("Live market discovery enabled - real movers pulled fresh each scan")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Scanner", "⭐ Watchlist", "🤖 Auto-Trader", "🌌 Rule flow", "🎯 Options"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📈 Scanner", "⭐ Watchlist", "🤖 Auto-Trader", "🌌 Rule flow", "🎯 Options", "🏁 Bot Performance"])
 
 with tab1:
     if run:
@@ -926,3 +926,8 @@ with tab4:
 with tab5:
     import options_tab
     options_tab.render(_get_supabase)
+
+
+with tab6:
+    import bot_performance_tab
+    bot_performance_tab.render(_get_supabase)
