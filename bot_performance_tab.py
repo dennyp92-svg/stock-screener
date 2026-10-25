@@ -290,3 +290,6 @@ def render(get_supabase):
 
     st.caption("Not included yet: the Webull options paper script (doesn't log to Supabase) and "
                "the auto-trader v2 (switched off, no closed trades).")
+
+    import trade_patterns
+    trade_patterns.render(sb, _fetch)
