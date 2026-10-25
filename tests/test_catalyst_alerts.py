@@ -68,3 +68,56 @@ def test_group_events_merges_report_variants():
 
 def test_trading_days_ahead():
     assert ca.trading_days_ahead(dt.date(2026, 10, 26), 4) == dt.date(2026, 10, 30)   # Mon -> Fri
+
+
+class _Resp:
+    def __init__(self, code, desc=""):
+        self.status_code, self.ok, self._d = code, code == 200, desc
+    def json(self):
+        return {"ok": self.ok, "description": self._d}
+
+
+def test_send_retries_plain_text_on_parse_error(monkeypatch):
+    sent = []
+    replies = iter([_Resp(400, "Bad Request: can't parse entities"), _Resp(200)])
+    monkeypatch.setattr(ca.requests, "post", lambda url, json, timeout: sent.append(json) or next(replies))
+    ca.send_telegram("<b>A &amp; B</b>", "tok", " 123 ")
+    assert sent[0]["chat_id"] == "123" and sent[0]["parse_mode"] == "HTML"
+    assert "parse_mode" not in sent[1] and sent[1]["text"] == "A & B"
+
+
+def test_send_reports_telegram_reason(monkeypatch):
+    import pytest
+    monkeypatch.setattr(ca.requests, "post", lambda url, json, timeout: _Resp(400, "Bad Request: chat not found"))
+    with pytest.raises(SystemExit) as e:
+        ca.send_telegram("hi", "tok", "1")
+    assert "chat not found" in str(e.value) and "CHAT_ID" in str(e.value) and "tok" not in str(e.value)
+
+
+def test_wrong_chat_id_finds_the_right_one(monkeypatch, capsys):
+    sent = []
+    replies = iter([_Resp(400, "Bad Request: chat not found"), _Resp(200)])
+    monkeypatch.setattr(ca.requests, "post", lambda url, json, timeout: sent.append(json) or next(replies))
+
+    class _Up:
+        ok = True
+        def json(self):
+            return {"result": [{"message": {"chat": {"id": 55501, "type": "private", "first_name": "Denny"}}}]}
+    monkeypatch.setattr(ca.requests, "get", lambda url, timeout: _Up())
+    ca.send_telegram("hi", "tok", "999")
+    assert sent[-1]["chat_id"] == "55501"
+    assert "55501" in capsys.readouterr().out
+
+
+def test_wrong_chat_id_and_no_messages_says_what_to_do(monkeypatch):
+    import pytest
+    monkeypatch.setattr(ca.requests, "post", lambda url, json, timeout: _Resp(400, "Bad Request: chat not found"))
+
+    class _Up:
+        ok = True
+        def json(self):
+            return {"result": []}
+    monkeypatch.setattr(ca.requests, "get", lambda url, timeout: _Up())
+    with pytest.raises(SystemExit) as e:
+        ca.send_telegram("hi", "tok", "999")
+    assert "press Start" in str(e.value)

@@ -233,11 +233,68 @@ def build_message(today, held, watched, options_expiry, earnings, events):
     return "\n".join(lines)
 
 
+def _plain(text):
+    return html.unescape(re.sub(r"</?[bi]>", "", text))
+
+
 def send_telegram(text, token, chat_id):
-    r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                      json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                            "disable_web_page_preview": True}, timeout=30)
-    r.raise_for_status()
+    """Sends the message. On failure, prints Telegram's own reason (never the token)."""
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": str(chat_id).strip(), "text": text, "parse_mode": "HTML",
+               "disable_web_page_preview": True}
+    r = requests.post(url, json=dict(payload), timeout=30)
+    reason = _reason(r)
+    if r.status_code == 400 and "parse" in reason.lower():
+        print(f"Telegram rejected the formatting ({reason}); resending as plain text.")
+        payload.pop("parse_mode")
+        payload["text"] = _plain(text)
+        r = requests.post(url, json=dict(payload), timeout=30)
+        reason = _reason(r)
+    if not r.ok and r.status_code == 400 and "chat" in reason.lower():
+        found = find_chat_ids(token)
+        print(f"Saved chat ID didn't work ({reason}). Chats that have messaged this bot: "
+              + (", ".join(f"{cid} ({name})" for cid, name in found) or "none"))
+        if len(found) == 1:
+            payload["chat_id"] = str(found[0][0])
+            r = requests.post(url, json=dict(payload), timeout=30)
+            reason = _reason(r)
+            if r.ok:
+                print(f"Sent to chat {found[0][0]}. Put this number in the "
+                      f"CATALYST_TELEGRAM_CHAT_ID secret so it's used from now on.")
+                return
+        elif not found:
+            reason += " (no chats found: open your bot in Telegram, press Start or send it any message, then run again)"
+        else:
+            reason += " (several chats found; put the right number in CATALYST_TELEGRAM_CHAT_ID)"
+    if not r.ok:
+        hint = {400: "check CATALYST_TELEGRAM_CHAT_ID, and send your bot a message first",
+                401: "check CATALYST_TELEGRAM_BOT_TOKEN",
+                403: "the bot was blocked or can't post in that chat",
+                404: "check CATALYST_TELEGRAM_BOT_TOKEN"}.get(r.status_code, "")
+        raise SystemExit(f"Telegram error {r.status_code}: {reason}" + (f" -> {hint}" if hint else ""))
+
+
+def find_chat_ids(token):
+    """[(chat_id, name)] of private chats that recently messaged the bot (Telegram keeps ~24h)."""
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=30)
+        updates = r.json().get("result", []) if r.ok else []
+    except Exception:
+        return []
+    chats = {}
+    for u in updates:
+        msg = u.get("message") or u.get("edited_message") or u.get("my_chat_member") or {}
+        chat = msg.get("chat") or {}
+        if chat.get("type") == "private" and chat.get("id") is not None:
+            chats[chat["id"]] = chat.get("first_name") or chat.get("username") or ""
+    return list(chats.items())
+
+
+def _reason(r):
+    try:
+        return r.json().get("description", "") or ""
+    except ValueError:
+        return r.text[:200]
 
 
 # ---------------------------------------------------------------- main -------
@@ -290,7 +347,7 @@ def main():
             print("Telegram secrets not set yet; printing instead of sending.")
         print("---- message not sent ----\n" + text)
         return 0
-    send_telegram(text, os.environ["TELEGRAM_BOT_TOKEN"], os.environ["TELEGRAM_CHAT_ID"])
+    send_telegram(text, os.environ["TELEGRAM_BOT_TOKEN"], os.getenv("TELEGRAM_CHAT_ID") or "0")
     print("Sent.")
     return 0
 
