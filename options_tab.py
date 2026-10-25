@@ -72,6 +72,42 @@ def scans_frame(rows):
     return pd.DataFrame(out)
 
 
+@st.fragment(run_every=5)
+def _scan_status(sb):
+    """Shows the Scan button's progress. The MacBook Air picks the request up within about a minute."""
+    try:
+        r = (sb.table("options_screener_requests").select("*").order("requested_at", desc=True)
+             .limit(1).execute().data or [None])[0]
+    except Exception as e:
+        st.caption(f"Scan status unavailable: {e}")
+        return
+    if not r:
+        return
+    asked = pd.to_datetime(r["requested_at"]).tz_convert(CT)
+    waited = (dt.datetime.now(CT) - asked).total_seconds()
+    status = r["status"]
+    if status == "pending":
+        if waited > 120:
+            st.warning(f"Scan requested at {asked:%H:%M} is still waiting. The MacBook Air may be asleep or offline.")
+        else:
+            st.info(f"Scan requested at {asked:%H:%M}. Waiting for the MacBook Air to start it (up to a minute)...")
+    elif status == "running":
+        st.info(f"Scanning now (started {pd.to_datetime(r['started_at']).tz_convert(CT):%H:%M:%S})...")
+    elif status == "done":
+        done = pd.to_datetime(r["finished_at"]).tz_convert(CT)
+        if st.session_state.get("opt_seen_done") != r["id"]:
+            st.session_state.opt_seen_done = r["id"]
+            st.rerun(scope="app")          # reload the tables below with the new results
+        st.success(f"Scan finished at {done:%H:%M:%S} CT. Results are below.")
+        st.session_state.opt_scan_at = None
+    elif status == "expired":
+        st.warning("That scan request expired: the MacBook Air didn't pick it up within 15 minutes.")
+        st.session_state.opt_scan_at = None
+    else:
+        st.error(f"Scan failed: {r.get('note') or 'unknown error'}")
+        st.session_state.opt_scan_at = None
+
+
 def render(get_supabase):
     st.title("🎯 Options Screener")
     st.caption("Debit-spread alerts from the screener on your MacBook Air. It only alerts; it never places orders. "
@@ -86,8 +122,14 @@ def render(get_supabase):
         return
 
     day = st.date_input("Day", value=dt.datetime.now(CT).date(), key="opt_day")
-    if st.button("🔄 Refresh", key="opt_refresh"):
-        st.rerun()
+    if st.button("🔍 Scan", key="opt_scan", type="primary"):
+        try:
+            sb.table("options_screener_requests").insert({"status": "pending"}).execute()
+            st.session_state.opt_scan_at = dt.datetime.now(CT)
+        except Exception as e:
+            st.error(f"Could not request a scan: {e}")
+    if st.session_state.get("opt_scan_at"):
+        _scan_status(sb)
 
     try:
         scans = _rows(sb, "options_screener_scans", eq={"day": str(day)}, order="scanned_at", limit=3000)
@@ -108,7 +150,8 @@ def render(get_supabase):
         else:
             st.caption(f"Last scan: {last:%Y-%m-%d %H:%M} CT")
     else:
-        st.caption("No scans for this day yet. The screener runs every 5 minutes, 9:00-14:00 CT on weekdays.")
+        st.caption("No scans for this day yet. The screener runs every 5 minutes, 9:00-14:00 CT on weekdays, "
+                   "or tap Scan to run one now.")
 
     st.subheader("Watching (exit alerts on)")
     if open_pos:
