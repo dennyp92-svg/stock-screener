@@ -64,3 +64,26 @@ def test_display_summary_is_all_text():
     assert shown.loc["Win rate", "Intraday bot"] == "50.0%"
     assert shown.loc["Win rate", "Options bot"] == "—"
     assert all(isinstance(v, str) for v in shown.to_numpy().ravel())
+
+
+def test_autotrader_journal_and_open_positions():
+    state = {"journal": [
+                {"symbol": "AMZN", "pnl": -39.37, "entry_ts": "2026-10-19 19:13:24",
+                 "exit_ts": "2026-10-23 17:50:37", "exit_reason": "STOP-LOSS"},
+                {"symbol": "SMCI", "pnl": 25.0, "entry_ts": "2026-09-17 19:03:36",
+                 "exit_ts": "2026-09-18 14:17:35", "exit_reason": "TARGET"}],
+             "positions": {"DDOG": {"qty": 3, "entry_ts": "2026-10-23 17:50:45"}}}
+    closed, opened = bp.autotrader_frames(state)
+    closed, opened = bp._times(closed), bp._times(opened)
+    # GitHub Actions timestamps are UTC: 17:50 UTC is 12:50 in Chicago
+    assert closed["exit_time"].iloc[0].strftime("%H:%M") == "12:50"
+    s = bp.summarize(closed, opened).set_index("Bot")
+    assert s.loc["Auto-trader", "Closed trades"] == 2
+    assert s.loc["Auto-trader", "Total P/L $"] == -14.37
+    assert s.loc["Auto-trader", "Open now"] == 1
+    assert s.loc["Auto-trader", "Open P/L $"] is None
+
+
+def test_autotrader_empty_state():
+    closed, opened = bp.autotrader_frames(None)
+    assert closed.empty and opened.empty

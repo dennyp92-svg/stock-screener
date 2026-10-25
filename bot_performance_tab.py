@@ -6,6 +6,7 @@ Supabase tables the bots already write to and never touches the bots.
   Intraday bot  (iMac)        -> bot_log         rows where kind = 'trade'
   Options bot   (iMac)        -> option_bot_log  rows where kind = 'closed'
   Picks bot     (MacBook Air) -> quant_bot_trades (open + closed)
+  Auto-trader   (GitHub)      -> auto_trade_state row 'paper' (its journal + open positions)
 """
 from __future__ import annotations
 
@@ -16,7 +17,8 @@ import streamlit as st
 
 CT = ZoneInfo("America/Chicago")
 MIN_TRADES = 30          # below this, results are flagged as too early to judge
-BOTS = ["Intraday bot", "Options bot", "Picks bot"]
+BOTS = ["Intraday bot", "Options bot", "Picks bot", "Auto-trader"]
+AUTO_TRADER_STATE_ID = "paper"   # the scheduled auto-trader; paper_v2 is switched off
 
 COLUMNS = ["bot", "symbol", "side", "strategy", "entry_time", "exit_time",
            "pnl", "r_multiple", "exit_reason"]
@@ -101,6 +103,42 @@ def picks_frames(rows):
     return pd.DataFrame(closed, columns=COLUMNS), pd.DataFrame(opened, columns=COLUMNS)
 
 
+def autotrader_frames(state):
+    """Returns (closed trades, open positions) from the auto-trader's saved state.
+
+    The auto-trader runs on GitHub Actions, so its timestamps are UTC with no zone marker.
+    Open positions have no live price here, so their P/L is left blank.
+    """
+    state = state or {}
+    closed = [{
+        "bot": "Auto-trader",
+        "symbol": j.get("symbol"),
+        "side": "long",
+        "strategy": "momentum",
+        "entry_time": _utc(j.get("entry_ts")),
+        "exit_time": _utc(j.get("exit_ts")),
+        "pnl": _num(j.get("pnl")),
+        "r_multiple": None,
+        "exit_reason": j.get("exit_reason"),
+    } for j in state.get("journal") or []]
+    opened = [{
+        "bot": "Auto-trader",
+        "symbol": sym,
+        "side": "long",
+        "strategy": "momentum",
+        "entry_time": _utc(p.get("entry_ts")),
+        "exit_time": None,
+        "pnl": None,
+        "r_multiple": None,
+        "exit_reason": None,
+    } for sym, p in (state.get("positions") or {}).items()]
+    return pd.DataFrame(closed, columns=COLUMNS), pd.DataFrame(opened, columns=COLUMNS)
+
+
+def _utc(ts):
+    return f"{ts}+00:00" if ts and "+" not in ts and not ts.endswith("Z") else ts
+
+
 def _times(df):
     df = df.copy()
     for c in ("entry_time", "exit_time"):
@@ -141,7 +179,7 @@ def summarize(closed: pd.DataFrame, opened: pd.DataFrame | None = None) -> pd.Da
             "Biggest loss $": round(t["pnl"].min(), 2) if n else None,
             "Max drawdown $": round(max_drawdown(t["pnl"].tolist()), 2) if n else None,
             "Open now": len(o),
-            "Open P/L $": round(o["pnl"].fillna(0).sum(), 2) if len(o) else None,
+            "Open P/L $": round(o["pnl"].sum(), 2) if len(o) and o["pnl"].notna().any() else None,
             "Enough data?": "yes" if n >= MIN_TRADES else f"no ({n}/{MIN_TRADES})",
         })
     return pd.DataFrame(rows)
@@ -181,13 +219,16 @@ def _load(_sb):
     intraday = intraday_frame(_fetch(_sb, "bot_log", kind="trade"))
     options = options_frame(_fetch(_sb, "option_bot_log", kind="closed"))
     p_closed, p_open = picks_frames(_fetch(_sb, "quant_bot_trades"))
-    closed = _times(pd.concat([intraday, options, p_closed], ignore_index=True))
-    return closed, _times(p_open)
+    at_rows = (_sb.table("auto_trade_state").select("state")
+               .eq("id", AUTO_TRADER_STATE_ID).execute().data or [{}])
+    a_closed, a_open = autotrader_frames(at_rows[0].get("state"))
+    closed = _times(pd.concat([intraday, options, p_closed, a_closed], ignore_index=True))
+    return closed, _times(pd.concat([p_open, a_open], ignore_index=True))
 
 
 def render(get_supabase):
     st.subheader("🏁 Bot Performance")
-    st.caption("All three paper bots side by side. Read-only — this tab never touches the bots. "
+    st.caption("All four paper bots side by side. Read-only — this tab never touches the bots. "
                "Refreshes every 5 minutes.")
     try:
         sb = get_supabase()
@@ -234,14 +275,16 @@ def render(get_supabase):
         "r_multiple": "R", "exit_reason": "Exit reason"}).round(2),
         width="stretch", hide_index=True)
 
-    if len(opened) and pick in ("All", "Picks bot"):
-        st.markdown("**Picks bot — open positions** (P/L not final until closed)")
-        o = opened.copy()
+    o = opened if pick == "All" else opened[opened["bot"] == pick]
+    if len(o):
+        st.markdown("**Open positions** (P/L not final until closed; the auto-trader's "
+                    "open P/L isn't recorded, so it shows blank)")
+        o = o.copy()
         o["entry_time"] = o["entry_time"].dt.strftime("%b %d %H:%M")
-        st.dataframe(o[["symbol", "side", "strategy", "entry_time", "pnl"]].rename(columns={
-            "symbol": "Symbol", "side": "Side", "strategy": "Kind",
+        st.dataframe(o[["bot", "symbol", "side", "strategy", "entry_time", "pnl"]].rename(columns={
+            "bot": "Bot", "symbol": "Symbol", "side": "Side", "strategy": "Kind",
             "entry_time": "Entry", "pnl": "Open P/L $"}).round(2),
             width="stretch", hide_index=True)
 
     st.caption("Not included yet: the Webull options paper script (doesn't log to Supabase) and "
-               "the old auto-trader (keeps no trade history).")
+               "the auto-trader v2 (switched off, no closed trades).")
