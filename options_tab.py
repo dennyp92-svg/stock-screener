@@ -108,6 +108,31 @@ def _scan_status(sb):
         st.session_state.opt_scan_at = None
 
 
+def top3(latest_rows):
+    """Best 3 from the latest scan: passing spreads by score first, then near-misses (priced but failed a rule)."""
+    passed = sorted([r for r in latest_rows if r.get("passed")], key=lambda r: -(r.get("score") or 0))
+    near = sorted([r for r in latest_rows if not r.get("passed") and r.get("score") is not None],
+                  key=lambda r: -(r.get("score") or 0))
+    return [(r, True) for r in passed][:3] + [(r, False) for r in near][:max(0, 3 - len(passed))]
+
+
+def _card(r, ok, rank):
+    side = _side(r.get("side"))
+    exp = pd.to_datetime(r["expiry"]).strftime("%b %d") if r.get("expiry") else ""
+    title = (f"#{rank}  {r['symbol']} {side} {float(r['long_strike']):g}/{float(r['short_strike']):g} {exp}"
+             f"  ·  score {r.get('score')}")
+    with st.container(border=True):
+        if ok:
+            st.markdown(f"**{title}**")
+            st.write(f"Buy at limit **{float(r['limit_price']):.2f}** (mid {float(r['mid']):.2f}) · "
+                     f"max loss **${float(r['max_loss']):.0f}** · reward/risk {r.get('reward_risk')} · RVOL {r.get('rvol')}")
+            if r.get("alert_id"):
+                st.caption(f"After you buy, type to the bot: buy {r['alert_id']} <your fill price>")
+        else:
+            st.markdown(f"**{title}**  ·  :orange[NOT A PICK, near-miss]")
+            st.caption(f"Failed: {r.get('reason')}")
+
+
 def render(get_supabase):
     st.title("🎯 Options Screener")
     st.caption("Debit-spread alerts from the screener on your MacBook Air. It only alerts; it never places orders. "
@@ -152,6 +177,21 @@ def render(get_supabase):
     else:
         st.caption("No scans for this day yet. The screener runs every 5 minutes, 9:00-14:00 CT on weekdays, "
                    "or tap Scan to run one now.")
+
+    st.subheader("Top 3 to play")
+    if scans:
+        stamp = scans[0]["scanned_at"]
+        latest_rows = [r for r in scans if r["scanned_at"] == stamp]
+        picks = top3(latest_rows)
+        if picks:
+            st.caption("Ranked by score (0-100): volume strength, reward vs risk, tight prices, and how close price still is "
+                       "to the breakout. The score shows fit with your rules, not odds of profit.")
+            for i, (r, ok) in enumerate(picks, 1):
+                _card(r, ok, i)
+        else:
+            st.write("Nothing in the latest scan got far enough to price a spread.")
+    else:
+        st.write("Tap Scan, or wait for the next automatic scan.")
 
     st.subheader("Watching (exit alerts on)")
     if open_pos:
