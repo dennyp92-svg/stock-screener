@@ -142,7 +142,9 @@ def _utc(ts):
 def _times(df):
     df = df.copy()
     for c in ("entry_time", "exit_time"):
-        df[c] = pd.to_datetime(df[c], utc=True, errors="coerce").dt.tz_convert(CT)
+        # format="ISO8601" reads both "2026-10-23T17:50:37+00:00" (Supabase) and
+        # "2026-10-23 17:50:37+00:00" (auto-trader) in the same column
+        df[c] = pd.to_datetime(df[c], utc=True, errors="coerce", format="ISO8601").dt.tz_convert(CT)
     return df
 
 

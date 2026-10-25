@@ -87,3 +87,16 @@ def test_autotrader_journal_and_open_positions():
 def test_autotrader_empty_state():
     closed, opened = bp.autotrader_frames(None)
     assert closed.empty and opened.empty
+
+
+def test_mixed_date_formats_all_parse():
+    """The auto-trader writes dates with a space, Supabase bots with a 'T'; both must parse together."""
+    intr = bp.intraday_frame([_intraday(-58, "2026-10-23T18:33:19.824296+00:00")])
+    at, _ = bp.autotrader_frames({"journal": [{"symbol": "AMZN", "pnl": -39.37,
+                                               "entry_ts": "2026-10-19 19:13:24",
+                                               "exit_ts": "2026-10-23 17:50:37"}]})
+    closed = bp._times(pd.concat([intr, at], ignore_index=True))
+    assert closed["exit_time"].notna().all()
+    curve = bp.daily_cumulative(closed)
+    assert "Auto-trader" in curve.columns
+    assert curve.loc[curve.index[-1], "Auto-trader"] == -39.37
