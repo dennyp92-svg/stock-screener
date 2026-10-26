@@ -216,6 +216,16 @@ def display_summary(summary: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------- page -------
+@st.cache_data(ttl=3600, show_spinner=False)
+def _regimes():
+    """Daily market regime (SPY trend + VIX), or None if FMP isn't reachable. Cached an hour."""
+    try:
+        import market_regime
+        return market_regime.load()
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _load(_sb):
     intraday = intraday_frame(_fetch(_sb, "bot_log", kind="trade"))
@@ -230,6 +240,12 @@ def _load(_sb):
 
 def render(get_supabase):
     st.subheader("🏁 Bot Performance")
+    regimes = _regimes()
+    if regimes is not None:
+        import market_regime
+        line = market_regime.headline(regimes)
+        if line:
+            st.markdown(line)
     st.caption("All four paper bots side by side. Read-only — this tab never touches the bots. "
                "Refreshes every 5 minutes.")
     try:
@@ -292,4 +308,4 @@ def render(get_supabase):
                "the auto-trader v2 (switched off, no closed trades).")
 
     import trade_patterns
-    trade_patterns.render(sb, _fetch)
+    trade_patterns.render(sb, _fetch, regimes)
