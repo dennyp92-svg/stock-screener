@@ -78,13 +78,32 @@ def test_headline_and_fetch():
     assert list(s.index) == [dt.date(2026, 10, 22), dt.date(2026, 10, 23)] and s.iloc[-1] == 759.97
 
 
-def test_load_without_key_is_none(monkeypatch):
-    monkeypatch.setattr(mr, "_key", lambda: None)
-    assert mr.load() is None
-
-
 def test_trade_frames_carry_entry_dates():
     df = tp.intraday_patterns([{"payload": {"pnl_net": 5, "r_multiple": 0.5, "entry_ts": "2026-10-23T03:30:00+00:00"}}])
     assert df["entry_date"].iloc[0] == dt.date(2026, 10, 22)            # 3:30 UTC = 10:30 PM CT the day before
     pk = tp.picks_patterns([{"status": "closed", "pnl": 1, "r_multiple": 1, "entry_time": "2026-10-22T13:45:41+00:00"}])
     assert pk["entry_date"].iloc[0] == dt.date(2026, 10, 22)
+
+
+def test_load_reasons_and_vix_optional(monkeypatch):
+    import pytest
+    monkeypatch.setattr(mr, "_key", lambda: None)
+    with pytest.raises(RuntimeError, match="no FMP_KEY"):
+        mr.load()
+    monkeypatch.setattr(mr, "_key", lambda: "k")
+    spy = series([100 + i for i in range(70)])
+
+    def fake(symbol, key, start, end=None, get=None):
+        if symbol == "^VIX":
+            raise ValueError("restricted")
+        return spy
+    monkeypatch.setattr(mr, "fetch_closes", fake)
+    reg = mr.load()
+    assert reg["trend"].iloc[-1] == "Uptrend" and reg["vix"].isna().all()
+    assert "Uptrend · VIX n/a" in mr.headline(reg)
+
+    def broken(symbol, key, start, end=None, get=None):
+        raise ValueError("HTTP 403")
+    monkeypatch.setattr(mr, "fetch_closes", broken)
+    with pytest.raises(RuntimeError, match="SPY"):
+        mr.load()
