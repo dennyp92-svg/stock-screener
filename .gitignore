@@ -11,3 +11,4 @@ auto_trade_state.json.tmp
 .auto_trade_day.json
 conf/
 .auto_trade_stops.json
+.auto_trade_live_aux.json
