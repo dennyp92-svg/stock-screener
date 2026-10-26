@@ -31,6 +31,12 @@ def _f(v):
         return None
 
 
+def _entry_date(ts):
+    """Central-time calendar date a trade was entered, or None."""
+    t = pd.to_datetime(ts, utc=True, errors="coerce")
+    return None if pd.isna(t) else t.tz_convert(CT).date()
+
+
 def _hour_label(h):
     if h is None or pd.isna(h):
         return None
@@ -45,6 +51,7 @@ def intraday_patterns(rows):
         p = r.get("payload") or {}
         f = p.get("features") or {}
         out.append({
+            "entry_date": _entry_date(p.get("entry_ts")),
             "pnl": _f(p.get("pnl_net")),
             "score": _f(p.get("r_multiple")),
             "Strategy": p.get("strategy") or None,
@@ -52,7 +59,7 @@ def intraday_patterns(rows):
             "Entry hour (CT)": _f(f.get("hour_ct")),
             "Market direction": {-1: "Market down", 0: "Market flat", 1: "Market up"}.get(f.get("mkt_dir")),
             "Volatility": p.get("vol_bucket") or None,
-            "Regime": None if p.get("regime") in (None, "?") else p["regime"],
+            "Bot's regime tag": None if p.get("regime") in (None, "?") else p["regime"],
             "Session": {0: "Regular hours", 1: "Pre/after-hours"}.get(p.get("ext_entry")),
             "RSI": _f(f.get("rsi")),
             "ADX (trend strength)": _f(f.get("adx")),
@@ -70,6 +77,7 @@ def autotrader_patterns(state):
         m = j.get("entry_meta") or {}
         entry = pd.to_datetime(j.get("entry_ts"), utc=True, errors="coerce")
         out.append({
+            "entry_date": None if pd.isna(entry) else entry.tz_convert(CT).date(),
             "pnl": _f(j.get("pnl")),
             "score": _f(j.get("pnl_pct")),
             "Entry hour (CT)": None if pd.isna(entry) else entry.tz_convert(CT).hour,
@@ -87,6 +95,7 @@ def picks_patterns(rows):
         if r.get("status") != "closed":
             continue
         out.append({
+            "entry_date": _entry_date(r.get("entry_time") or r.get("submitted_at")),
             "pnl": _f(r.get("pnl")),
             "score": _f(r.get("r_multiple")),
             "Day or swing": r.get("kind"),
@@ -169,7 +178,7 @@ def breakdown(df, factor):
 
 
 def factors(df):
-    return [c for c in df.columns if c not in ("pnl", "score") and df[c].notna().sum() >= MIN_GROUP]
+    return [c for c in df.columns if c not in ("pnl", "score", "entry_date") and df[c].notna().sum() >= MIN_GROUP]
 
 
 def key_findings(df, limit=6, prefix="likely real"):
@@ -193,7 +202,7 @@ def _load(_sb, _fetch):
     return {"Intraday bot": intraday, "Auto-trader": auto, "Picks bot": picks}
 
 
-def render(sb, fetch):
+def render(sb, fetch, regimes=None):
     st.divider()
     st.subheader("🔍 What's working")
     st.caption("Each bot's closed trades split by the conditions it logged when it entered. "
@@ -207,8 +216,14 @@ def render(sb, fetch):
         st.error(f"Couldn't load trade details: {e}")
         return
 
+    if regimes is not None:
+        st.caption("Market trend and VIX are matched to each trade as of the previous close, "
+                   "i.e. what the bot could have known when it entered.")
     bot = st.selectbox("Bot to break down", list(data), key="patterns_bot")
     df = data[bot]
+    if regimes is not None:
+        import market_regime
+        df = market_regime.attach(df, regimes)
     n = int(df["score"].notna().sum()) if len(df) else 0
     if n < MIN_BOT_TRADES:
         st.info(f"{bot} has {n} closed trades with enough detail. Come back after "
