@@ -121,3 +121,10 @@ def test_wrong_chat_id_and_no_messages_says_what_to_do(monkeypatch):
     with pytest.raises(SystemExit) as e:
         ca.send_telegram("hi", "tok", "999")
     assert "press Start" in str(e.value)
+
+
+def test_watch_label_names_the_picks_date():
+    msg = ca.build_message(dt.date(2026, 10, 26), {}, {"PHAT"}, {}, {"PHAT": "2026-10-29"}, [], "2026-10-23")
+    assert "on the latest picks (Fri Oct 23)" in msg and "today's picks" not in msg
+    msg = ca.build_message(dt.date(2026, 10, 26), {}, {"PHAT"}, {}, {"PHAT": "2026-10-29"}, [], "2026-10-26")
+    assert "on today's picks" in msg

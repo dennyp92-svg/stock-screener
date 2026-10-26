@@ -102,11 +102,12 @@ def gather_symbols(sb):
 
     latest = (sb.table("quant_picks").select("pick_date").order("pick_date", desc=True)
               .limit(1).execute().data or [])
-    watched = set()
+    watched, day = set(), None
     if latest:
         day = latest[0]["pick_date"]
         watched = {r["symbol"] for r in _rows(sb, "quant_picks", pick_date=day)}
     counts["latest picks"] = len(watched)
+    counts["picks_date"] = day
     return dict(held), watched - set(held), opt, counts
 
 
@@ -198,7 +199,7 @@ def _when(date_str, today):
     return d.strftime("%a %b %-d")
 
 
-def build_message(today, held, watched, options_expiry, earnings, events):
+def build_message(today, held, watched, options_expiry, earnings, events, picks_date=None):
     """Returns the Telegram text (HTML), or None when there's nothing to warn about."""
     e = html.escape
     lines = [f"<b>📅 Catalyst check — {today.strftime('%a %b %-d')}</b>"]
@@ -215,7 +216,11 @@ def build_message(today, held, watched, options_expiry, earnings, events):
 
     watch_hits = sorted((d, s) for s, d in earnings.items() if s in watched)
     if watch_hits:
-        lines.append("\n<b>👀 Earnings — on today's picks</b>")
+        if picks_date and str(picks_date) != today.isoformat():
+            label = f"the latest picks ({dt.date.fromisoformat(str(picks_date)[:10]).strftime('%a %b %-d')})"
+        else:
+            label = "today's picks"
+        lines.append(f"\n<b>👀 Earnings — on {label}</b>")
         lines += [f"• {e(s)} {_when(d, today)}" for d, s in watch_hits]
 
     if events:
@@ -336,7 +341,7 @@ def main():
         print(f"FMP economic calendar failed: {ex}", file=sys.stderr)
         events = []
 
-    text = build_message(today, held, watched, options_expiry, earnings, events)
+    text = build_message(today, held, watched, options_expiry, earnings, events, counts.get("picks_date"))
     if text and source != "FMP":
         text = text.replace("Dates from FMP", f"Dates from {source}")
     if not text:
