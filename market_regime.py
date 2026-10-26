@@ -53,7 +53,7 @@ def classify(spy: pd.Series, vix: pd.Series) -> pd.DataFrame:
     df.loc[up, "trend"] = "Uptrend"
     df.loc[down, "trend"] = "Downtrend"
     df.loc[df["sma50"].isna(), "trend"] = None
-    df["vix"] = vix.reindex(df.index).ffill()
+    df["vix"] = vix.reindex(df.index).ffill() if len(vix) else float("nan")
     df["volatility"] = df["vix"].map(vol_label)
     return df
 
@@ -100,10 +100,21 @@ def _key():
 
 
 def load(today=None):
-    """Regimes from LOOKBACK_DAYS ago to today, or None when there's no key or FMP fails."""
+    """Regimes from LOOKBACK_DAYS ago to today. Raises with a readable reason when it can't.
+
+    The VIX is optional: if FMP won't serve it (index data can depend on the plan), the
+    trend label still works and volatility shows as unavailable."""
     key = _key()
     if not key:
-        return None
+        raise RuntimeError("no FMP_KEY in the app's secrets")
     today = today or dt.date.today()
     start = today - dt.timedelta(days=LOOKBACK_DAYS)
-    return classify(fetch_closes("SPY", key, start), fetch_closes("^VIX", key, start))
+    try:
+        spy = fetch_closes("SPY", key, start)
+    except Exception as e:
+        raise RuntimeError(f"FMP didn't return SPY prices ({type(e).__name__}: {str(e)[:120]})") from e
+    try:
+        vix = fetch_closes("^VIX", key, start)
+    except Exception:
+        vix = pd.Series(dtype=float)
+    return classify(spy, vix)
