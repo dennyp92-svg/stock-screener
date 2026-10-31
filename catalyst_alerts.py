@@ -206,7 +206,7 @@ def build_message(today, held, watched, options_expiry, earnings, events, picks_
 
     held_hits = sorted((d, s) for s, d in earnings.items() if s in held)
     if held_hits:
-        lines.append("\n<b>⚠️ Earnings — stocks your bots HOLD</b>")
+        lines.append("<b>⚠️ Earnings — stocks your bots HOLD</b>")
         for d, s in held_hits:
             note = ""
             exp = options_expiry.get(s)
@@ -220,11 +220,11 @@ def build_message(today, held, watched, options_expiry, earnings, events, picks_
             label = f"the latest picks ({dt.date.fromisoformat(str(picks_date)[:10]).strftime('%a %b %-d')})"
         else:
             label = "today's picks"
-        lines.append(f"\n<b>👀 Earnings — on {label}</b>")
+        lines.append(f"<b>👀 Earnings — on {label}</b>")
         lines += [f"• {e(s)} {_when(d, today)}" for d, s in watch_hits]
 
     if events:
-        lines.append("\n<b>🏛 High-impact economic events</b>")
+        lines.append("<b>🏛 High-impact economic events</b>")
         by_time = {}
         for when, name in events:
             by_time.setdefault(when, []).append(name)
@@ -234,8 +234,9 @@ def build_message(today, held, watched, options_expiry, earnings, events, picks_
 
     if len(lines) == 1:
         return None
-    lines.append("\n<i>Paper trading. Dates from FMP; confirm before trading around them.</i>")
-    return "\n".join(lines)
+    lines.append("<i>Paper trading. Dates from FMP; confirm before trading around them.</i>")
+    # Blank line between every line so the alert is easier to read on a phone.
+    return "\n\n".join(lines)
 
 
 def _plain(text):
