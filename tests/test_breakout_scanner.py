@@ -72,3 +72,50 @@ def test_state_resets_each_day(tmp_path):
     bs.save_state(p, s)
     assert bs.load_state(p, dt.date(2026, 11, 12))["triggered"] == ["ABC"]
     assert bs.load_state(p, dt.date(2026, 11, 13))["triggered"] == []
+
+
+def test_positions_and_offset_survive_new_day(tmp_path):
+    p = tmp_path / "s.json"
+    s = bs.load_state(p, dt.date(2026, 11, 12))
+    s["positions"] = {"NVDA": {"entry": 100}}
+    s["tg_offset"] = 55
+    bs.save_state(p, s)
+    s2 = bs.load_state(p, dt.date(2026, 11, 13))
+    assert s2["positions"] == {"NVDA": {"entry": 100}} and s2["tg_offset"] == 55 and not s2["watch_sent"]
+
+
+def test_plan_uses_10_day_low_capped_at_10_pct():
+    day = dt.date(2026, 11, 12)  # Thursday
+    pl = bs.plan(100.0, 95.0, day)
+    assert pl["stop"] == 95.0 and pl["target"] == 115.0 and pl["sell_by"] == "2026-12-10"
+    assert bs.plan(100.0, 80.0, day)["stop"] == 90.0          # capped
+    assert bs.plan(100.0, 80.0, day)["target"] == 130.0
+
+
+def test_parse_command():
+    assert bs.parse_command("buy nvda") == ("buy", "NVDA", None)
+    assert bs.parse_command("Bought AMD $182.50") == ("buy", "AMD", 182.5)
+    assert bs.parse_command("sell amd") == ("sell", "AMD", None)
+    assert bs.parse_command("/list") == ("list", None, None)
+    assert bs.parse_command("hello there") is None
+
+
+def test_check_exit():
+    p = {"entry": 100, "stop": 95, "target": 115, "sell_by": "2026-12-10"}
+    today = dt.date(2026, 11, 20)
+    assert "STOP" in bs.check_exit(p, pd.Series({"Low": 94.9, "High": 101, "Close": 96}), today)
+    assert "TARGET" in bs.check_exit(p, pd.Series({"Low": 110, "High": 115.2, "Close": 114}), today)
+    assert bs.check_exit(p, pd.Series({"Low": 99, "High": 105, "Close": 104}), today) is None
+    assert "20 trading days" in bs.check_exit(p, None, dt.date(2026, 12, 10))
+
+
+def test_handle_commands_buy_sell_list(monkeypatch):
+    df = make_bars()
+    monkeypatch.setattr(bs, "daily_bars", lambda syms, **k: {s: df for s in syms})
+    today = dt.date(2026, 11, 12)
+    state = {"positions": {}}
+    out = bs.handle_commands(state, [("buy", "ABC", 50.0), ("list", None, None)], today, None)
+    assert "Tracking" in out and "ABC" in state["positions"]
+    assert state["positions"]["ABC"]["entry"] == 50.0
+    out = bs.handle_commands(state, [("sell", "ABC", None)], today, None)
+    assert "Stopped tracking" in out and state["positions"] == {}

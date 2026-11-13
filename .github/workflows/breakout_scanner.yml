@@ -14,7 +14,7 @@ on:
       force:
         description: 'What to run now'
         type: choice
-        options: [both, watch, trigger]
+        options: [both, watch, trigger, commands]
         default: both
       dry_run:
         description: 'Print the messages instead of sending them'
@@ -50,7 +50,7 @@ jobs:
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || '' }}
           DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
         run: python breakout_scanner.py
-      - if: github.event_name == 'schedule'
+      - if: github.event_name == 'schedule' || !inputs.dry_run
         uses: actions/cache/save@v4
         with:
           path: breakout_state.json

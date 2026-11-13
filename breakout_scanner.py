@@ -13,6 +13,13 @@ most-actives/gainers lists if the screener isn't available on the plan.
 Daily bars come from Yahoo Finance (yfinance), which includes today's
 partial bar during the session.
 
+Buy/sell help (exits picked by backtest_breakout.py, best of the variants tested):
+  each TRIGGERED stock shows a stop (10-day low, at most 10% below), a target
+  (3x the risk above entry) and a sell-by date (20 trading days). Text the bot
+  "buy NVDA" (or "buy NVDA 182.50" with your fill) and it watches the stock and
+  tells you when the stop, target or sell-by date is hit. "sell NVDA" stops
+  tracking, "list" shows what's tracked. Commands are read on each run (every 30 min).
+
 Read-only: never places trades.
 
 Env: FMP_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
@@ -52,6 +59,11 @@ WATCH_TOP_N = 10
 TRIGGER_MIN_BREAK = 0.2  # at least 0.2% above resistance
 TRIGGER_MAX_EXT = 5.0    # skip if already >5% above (too extended to chase)
 TRIGGER_MIN_RVOL = 1.5   # today's volume pace vs the 50-day average
+
+# Exits (best in the 5-year backtest)
+STOP_MAX_PCT = 10.0      # stop = 10-day low, but never more than 10% below entry
+TARGET_R = 3.0           # target = entry + 3x the risk
+HOLD_DAYS = 20           # sell after 20 trading days if neither is hit
 
 # Clock (Central time)
 WATCH_FROM = dt.time(7, 30)
@@ -160,7 +172,19 @@ def setup_stats(d):
         "avg_vol50": float(d["Volume"].iloc[-50:].mean()),
         "high_52w": float(d["High"].iloc[-252:].max()),
         "ret_63": float(close / d["Close"].iloc[-63] - 1) if len(d) >= 63 else 0.0,
+        "low10": float(last10["Low"].min()),
     }
+
+
+def plan(entry, low10, day):
+    """Stop, target and sell-by date for a buy at `entry` on `day`."""
+    stop = max(low10, entry * (1 - STOP_MAX_PCT / 100))
+    if stop >= entry:
+        stop = entry * (1 - STOP_MAX_PCT / 100)
+    target = entry + TARGET_R * (entry - stop)
+    sell_by = np.busday_offset(np.datetime64(day), HOLD_DAYS, roll="forward").astype(dt.date)
+    return {"entry": round(entry, 2), "stop": round(stop, 2), "target": round(target, 2),
+            "sell_by": sell_by.isoformat(), "bought": day.isoformat()}
 
 
 def in_uptrend(st):
@@ -228,13 +252,145 @@ def fmt_trigger(now_ct, hits):
             tags.append("was on WATCH ✅")
         if t["new_52w"]:
             tags.append("new 52-wk high")
+        pl = plan(t["price"], st["low10"], now_ct.date())
         lines.append(f"• <b>{e(s)}</b> ${t['price']:.2f} — {t['above']:.1f}% over ${st['resistance']:.2f} · "
-                     f"volume pace {t['rvol']:.1f}x" + (f"\n    {' · '.join(tags)}" if tags else ""))
-    lines.append("<i>Prices from Yahoo, can lag a few minutes. Not trade advice.</i>")
+                     f"volume pace {t['rvol']:.1f}x" + (f"\n    {' · '.join(tags)}" if tags else "")
+                     + f"\n    🟢 Buy ~${pl['entry']:.2f} · 🛑 stop ${pl['stop']:.2f} · 🎯 target ${pl['target']:.2f}"
+                     f" · ⏰ sell by {_d(pl['sell_by'])}")
+    lines.append("<i>Bought one? Text me <b>buy TICKER</b> (add your price, e.g. buy NVDA 182.50) "
+                 "and I'll tell you when to sell. Prices from Yahoo, can lag a few minutes. Not trade advice.</i>")
     return "\n\n".join(lines)
 
 
+def _d(iso):
+    return dt.date.fromisoformat(iso).strftime("%a %b %-d")
+
+
+def fmt_position(sym, p):
+    return (f"<b>{html.escape(sym)}</b> bought ${p['entry']:.2f} · 🛑 ${p['stop']:.2f} · "
+            f"🎯 ${p['target']:.2f} · ⏰ {_d(p['sell_by'])}")
+
+
+# ---------------------------------------------------------------- positions --
+def parse_command(text):
+    """('buy', 'NVDA', 182.5) / ('buy', 'NVDA', None) / ('sell', 'NVDA', None) / ('list', None, None) / None."""
+    parts = (text or "").strip().replace("$", "").split()
+    if not parts:
+        return None
+    cmd = parts[0].lower().lstrip("/")
+    if cmd in ("list", "positions", "status"):
+        return ("list", None, None)
+    if cmd in ("help", "start"):
+        return ("help", None, None)
+    if cmd in ("buy", "bought", "sell", "sold") and len(parts) >= 2 and clean_symbol(parts[1].upper()):
+        price = None
+        if len(parts) >= 3:
+            try:
+                price = float(parts[2])
+            except ValueError:
+                pass
+        return ("buy" if cmd in ("buy", "bought") else "sell", parts[1].upper(), price)
+    return None
+
+
+def check_exit(p, bar, today):
+    """Returns the reason to sell now, or None. `bar` is today's bar (or None)."""
+    if bar is not None:
+        if float(bar["Low"]) <= p["stop"]:
+            return f"🛑 STOP hit (${p['stop']:.2f}) — sell"
+        if float(bar["High"]) >= p["target"]:
+            return f"🎯 TARGET hit (${p['target']:.2f}) — sell"
+    if today.isoformat() >= p["sell_by"]:
+        return "⏰ 20 trading days are up — sell"
+    return None
+
+
+def read_commands(state, token, chat):
+    """New messages from your chat since the last run, as parsed commands."""
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=30,
+                         params={"offset": state.get("tg_offset", 0), "timeout": 0})
+        updates = r.json().get("result", []) if r.ok else []
+    except Exception as ex:
+        print(f"Couldn't read Telegram commands: {ex}", file=sys.stderr)
+        return []
+    cmds = []
+    for u in updates:
+        state["tg_offset"] = max(state.get("tg_offset", 0), u["update_id"] + 1)
+        msg = u.get("message") or {}
+        if str((msg.get("chat") or {}).get("id")) != str(chat):
+            continue
+        c = parse_command(msg.get("text"))
+        if c:
+            cmds.append(c)
+    return cmds
+
+
+def handle_commands(state, cmds, today, now_ct):
+    """Applies buy/sell/list commands; returns reply text or None."""
+    if not cmds:
+        return None
+    pos = state.setdefault("positions", {})
+    replies = []
+    buys = [c for c in cmds if c[0] == "buy"]
+    bars = daily_bars([c[1] for c in buys], retry=False) if buys else {}
+    for cmd, sym, price in cmds:
+        if cmd == "buy":
+            df = bars.get(sym)
+            if df is None:
+                replies.append(f"❓ Couldn't find price data for {html.escape(sym)}.")
+                continue
+            done, bar = split_today(df, today)
+            entry = price or float((bar if bar is not None else done.iloc[-1])["Close"])
+            pos[sym] = plan(entry, float(done["Low"].iloc[-10:].min()), today)
+            replies.append("✅ Tracking " + fmt_position(sym, pos[sym])
+                           + ("" if price else "\n    <i>(used the current price; send buy "
+                              f"{html.escape(sym)} PRICE to set your fill)</i>"))
+        elif cmd == "sell":
+            replies.append(f"👋 Stopped tracking {html.escape(sym)}." if pos.pop(sym, None)
+                           else f"{html.escape(sym)} wasn't being tracked.")
+        elif cmd == "list":
+            replies.append("<b>Tracking:</b>\n" + "\n".join("• " + fmt_position(s, p) for s, p in pos.items())
+                           if pos else "Not tracking anything. Text <b>buy TICKER</b> after you buy.")
+        else:
+            replies.append("Commands: <b>buy TICKER</b> (or buy TICKER PRICE), <b>sell TICKER</b>, <b>list</b>. "
+                           "I check every 30 min while the market's open.")
+    return "\n\n".join(replies)
+
+
+def exit_alerts(state, today, now_ct):
+    """Checks tracked stocks; returns alert text or None. Alerted stocks stop being tracked."""
+    pos = state.get("positions") or {}
+    if not pos:
+        return None
+    bars = daily_bars(list(pos), retry=False)
+    lines = []
+    for sym, p in list(pos.items()):
+        df = bars.get(sym)
+        bar = split_today(df, today)[1] if df is not None else None
+        why = check_exit(p, bar, today)
+        if why:
+            last = f" (now ${float(bar['Close']):.2f})" if bar is not None else ""
+            chg = (float(bar["Close"]) / p["entry"] - 1) * 100 if bar is not None else None
+            lines.append(f"<b>{html.escape(sym)}</b>: {why}{last}"
+                         + (f" · {chg:+.1f}% from ${p['entry']:.2f}" if chg is not None else ""))
+            pos.pop(sym)
+    if not lines:
+        return None
+    return (f"<b>🔔 SELL alert — {now_ct.strftime('%-I:%M %p')} CT</b>\n\n" + "\n\n".join(lines)
+            + "\n\n<i>Stopped tracking these. Not trade advice.</i>")
+
+
 # ---------------------------------------------------------------- telegram ---
+def resolve_chat(token):
+    chat = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
+    if chat:
+        return chat
+    from catalyst_alerts import find_chat_ids
+    found = find_chat_ids(token)
+    return str(found[0][0]) if len(found) == 1 else None
+
+
 def send(text):
     if os.getenv("DRY_RUN") == "1" or not os.getenv("TELEGRAM_BOT_TOKEN"):
         if os.getenv("DRY_RUN") != "1":
@@ -267,14 +423,17 @@ def send(text):
 
 # ---------------------------------------------------------------- state ------
 def load_state(path, today):
+    """Daily fields reset each day; tracked positions and the Telegram offset carry over."""
+    st = {}
     try:
         with open(path) as f:
             st = json.load(f)
-        if st.get("date") == today.isoformat():
-            return st
     except (OSError, ValueError):
         pass
-    return {"date": today.isoformat(), "watch_sent": False, "watch": [], "triggered": []}
+    keep = {"positions": st.get("positions", {}), "tg_offset": st.get("tg_offset", 0)}
+    if st.get("date") == today.isoformat():
+        return {**st, **keep}
+    return {"date": today.isoformat(), "watch_sent": False, "watch": [], "triggered": [], **keep}
 
 
 def save_state(path, st):
@@ -293,6 +452,19 @@ def main(now=None):
         return 0
     state_path = os.getenv("STATE_FILE", "breakout_state.json")
     state = load_state(state_path, today)
+
+    dry = os.getenv("DRY_RUN") == "1"
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if token and not dry:
+        chat = resolve_chat(token)
+        if chat:
+            reply = handle_commands(state, read_commands(state, token, chat), today, now)
+            if reply:
+                send(reply)
+    if state.get("positions") and OPEN <= t <= dt.time(15, 15):
+        alert = exit_alerts(state, today, now)
+        if alert:
+            send(alert)
 
     do_watch = force in ("watch", "both") or (not force and not state["watch_sent"] and WATCH_FROM <= t < WATCH_UNTIL)
     do_trigger = force in ("trigger", "both") or (not force and OPEN <= t <= TRIGGER_UNTIL)
