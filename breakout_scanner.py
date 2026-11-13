@@ -247,6 +247,13 @@ def send(text):
     if not chat:
         found = find_chat_ids(token)
         if len(found) != 1:
+            try:
+                me = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=30).json()
+                up = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=30)
+                print(f"Token belongs to @{(me.get('result') or {}).get('username')}; "
+                      f"getUpdates -> {up.status_code} {_reason(up) if not up.ok else str(len(up.json().get('result', []))) + ' updates'}")
+            except Exception as ex:
+                print(f"Telegram check failed: {ex}")
             raise SystemExit("BREAKOUT_TELEGRAM_CHAT_ID not set and couldn't tell which chat to use "
                              f"(chats found: {found or 'none - press Start in your new bot first'}).")
         chat = str(found[0][0])
