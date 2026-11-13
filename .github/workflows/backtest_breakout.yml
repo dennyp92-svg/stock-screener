@@ -1,0 +1,32 @@
+name: Breakout Backtest
+
+# Manual only. Tests the breakout scanner's rules on past daily data with
+# several stop/target exits and compares them with random entries.
+
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: 'Years of history'
+        default: '5'
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests pandas numpy yfinance
+      - name: Run backtest
+        env:
+          FMP_KEY: ${{ secrets.FMP_KEY }}
+          YEARS: ${{ inputs.years }}
+        run: python backtest_breakout.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: breakout-backtest
+          path: breakout_backtest_*.csv
