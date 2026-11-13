@@ -7,8 +7,6 @@ name: Breakout Scanner
 # from the Central-time clock what (if anything) to send.
 
 on:
-  push:
-    branches: [breakout-scanner]  # TEMP test
   schedule:
     - cron: '15,45 13-21 * * 1-5'
   workflow_dispatch:
@@ -49,8 +47,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.BREAKOUT_TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.BREAKOUT_TELEGRAM_CHAT_ID }}
           STATE_FILE: breakout_state.json
-          FORCE: ${{ github.event_name == 'push' && 'both' || (github.event_name == 'workflow_dispatch' && inputs.force || '') }}
-          DRY_RUN: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run)) && '1' || '0' }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || '' }}
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
         run: python breakout_scanner.py
       - if: github.event_name == 'schedule'
         uses: actions/cache/save@v4

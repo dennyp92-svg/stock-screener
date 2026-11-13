@@ -100,7 +100,7 @@ def universe(key):
     return syms, "FMP most-actives/gainers"
 
 
-def daily_bars(symbols, chunk=200):
+def daily_bars(symbols, chunk=200, threads=True, retry=True):
     """{symbol: DataFrame[Open, High, Low, Close, Volume]} of ~1 year of daily bars."""
     import yfinance as yf
     out = {}
@@ -108,7 +108,7 @@ def daily_bars(symbols, chunk=200):
         part = symbols[i:i + chunk]
         try:
             df = yf.download(part, period="1y", interval="1d", group_by="ticker",
-                             auto_adjust=False, progress=False, threads=True)
+                             auto_adjust=False, progress=False, threads=threads)
         except Exception as ex:
             print(f"yfinance chunk {i} failed: {ex}", file=sys.stderr)
             continue
@@ -121,6 +121,9 @@ def daily_bars(symbols, chunk=200):
                     out[s] = d
             except KeyError:
                 pass
+    missing = [s for s in symbols if s not in out]
+    if retry and 0 < len(missing) <= 50:   # one-off download hiccups; retry slowly once
+        out.update(daily_bars(missing, threads=False, retry=False))
     return out
 
 
