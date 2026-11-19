@@ -47,7 +47,7 @@ jobs:
         env:
           FMP_KEY: ${{ secrets.FMP_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.BREAKOUT_TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.BREAKOUT_TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.BREAKOUT_TELEGRAM_CHAT_ID || '8820826591' }}
           STATE_FILE: breakout_state.json
           FORCE: ${{ (github.event_name == 'workflow_dispatch' && inputs.force != 'auto') && inputs.force || '' }}
           DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
