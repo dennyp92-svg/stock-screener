@@ -21,7 +21,7 @@ on:
       dry_run:
         description: 'Print the messages instead of sending them'
         type: boolean
-        default: true
+        default: false
 
 concurrency:
   group: breakout-scanner
