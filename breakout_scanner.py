@@ -270,6 +270,30 @@ def trigger(st, bar, now_ct, need_volume=True):
 
 
 # ---------------------------------------------------------------- messages ---
+def _kind(sym):
+    return "⚡ FUTURES" if sym in FUTURES else "📊 INDEX" if sym in INDEXES else "🏢 STOCK"
+
+
+def _ix(sym):
+    return f" — {html.escape(INDEXES[sym])}" if sym in INDEXES else ""
+
+
+def _name(sym):
+    return FUTURES.get(sym, sym)
+
+
+def _sections(items, sym_of, render):
+    """Indexes/futures first, then stocks, each under its own heading."""
+    out = []
+    for title, keep in (("<b>📊⚡ INDEXES &amp; FUTURES</b>", lambda x: sym_of(x) in INDEXES),
+                        ("<b>🏢 STOCKS</b>", lambda x: sym_of(x) not in INDEXES)):
+        group = [x for x in items if keep(x)]
+        if group:
+            out.append(title)
+            out += [render(i, x) for i, x in enumerate(group, 1)]
+    return out
+
+
 def fmt_watch(today, picks, source, scanned, market=None):
     e = html.escape
     lines = [f"<b>🔭 WATCH LIST — not a breakout yet — {today.strftime('%a %b %-d')}</b>",
@@ -277,44 +301,43 @@ def fmt_watch(today, picks, source, scanned, market=None):
              "you'll get a separate 🚀 BREAKOUT message.</i>"]
     if market and not market[0]:
         lines.append(f"⚠️ Market is weak (SPY ${market[1]:.2f} is below its 50-day ${market[2]:.2f}). "
-                     "Stock breakout alerts are paused until it's back above; "
-                     "SPY, QQQ, IWM and DIA breakouts still come through.")
+                     "🏢 STOCK breakout alerts are paused until it's back above; "
+                     "📊 INDEX and ⚡ FUTURES breakouts (SPY, QQQ, IWM, DIA, NQ) still come through.")
     if not picks:
         lines.append("No setups passed the rules today.")
-    for i, (s, sc, st) in enumerate(picks, 1):
-        lines.append(f"{i}. <b>{e(_name(s))}</b>{_ix(s)} ${st['close']:.2f} — needs to clear <b>${st['resistance']:.2f}</b> "
-                     f"({st['dist']:.1f}% away)\n    score {sc} · 10-day range {st['range10']:.1f}%"
-                     + (" · near 52-wk high" if st["resistance"] >= st["high_52w"] * 0.98 else ""))
-    lines.append(f"<i>{scanned} stocks scanned ({e(source)}). Not trade advice — paper/test first.</i>")
+
+    def row(i, x):
+        s, sc, st = x
+        return (f"{i}. {_kind(s)} <b>{e(_name(s))}</b>{_ix(s)} ${st['close']:.2f} — needs to clear "
+                f"<b>${st['resistance']:.2f}</b> ({st['dist']:.1f}% away)\n    score {sc} · 10-day range {st['range10']:.1f}%"
+                + (" · near 52-wk high" if st["resistance"] >= st["high_52w"] * 0.98 else ""))
+    lines += _sections(picks, lambda x: x[0], row)
+    lines.append(f"<i>{scanned} scanned ({e(source)}). Not trade advice — paper/test first.</i>")
     return "\n\n".join(lines)
 
 
 def fmt_trigger(now_ct, hits):
     e = html.escape
     lines = [f"<b>🚀 BREAKOUT — buy signal — {now_ct.strftime('%-I:%M %p')} CT</b>",
-             "<i>Broke above its 20-day high on heavy volume, with the market in an uptrend.</i>"]
-    for s, t, st, was_watched in hits:
+             "<i>Broke above its 20-day high. 🏢 Stocks also need heavy volume and SPY above its 50-day.</i>"]
+
+    def row(_, x):
+        s, t, st, was_watched = x
         tags = []
         if was_watched:
             tags.append("was on this morning's watch list ✅")
         if t["new_52w"]:
             tags.append("new 52-wk high")
         pl = plan(t["price"], st["low10"], now_ct.date())
-        lines.append(f"• <b>{e(_name(s))}</b>{_ix(s)} ${t['price']:.2f} — {t['above']:.1f}% over ${st['resistance']:.2f} · "
-                     + (f"volume pace {t['rvol']:.1f}x" if s not in INDEXES else "index: volume not required") + (f"\n    {' · '.join(tags)}" if tags else "")
-                     + f"\n    🟢 Buy ~${pl['entry']:.2f} · 🛑 stop ${pl['stop']:.2f} · 🎯 target ${pl['target']:.2f}"
-                     f" · ⏰ sell by {_d(pl['sell_by'])}")
-    lines.append("<i>Bought one? Text me <b>buy TICKER</b> (add your price, e.g. buy NVDA 182.50) "
+        return (f"• {_kind(s)} <b>{e(_name(s))}</b>{_ix(s)} ${t['price']:.2f} — {t['above']:.1f}% over ${st['resistance']:.2f} · "
+                + (f"volume pace {t['rvol']:.1f}x" if s not in INDEXES else "volume not required")
+                + (f"\n    {' · '.join(tags)}" if tags else "")
+                + f"\n    🟢 Buy ~${pl['entry']:.2f} · 🛑 stop ${pl['stop']:.2f} · 🎯 target ${pl['target']:.2f}"
+                f" · ⏰ sell by {_d(pl['sell_by'])}")
+    lines += _sections(hits, lambda x: x[0], row)
+    lines.append("<i>Bought one? Text me <b>buy TICKER</b> (add your price, e.g. buy NVDA 182.50, or buy NQ) "
                  "and I'll tell you when to sell. Prices from Yahoo, can lag a few minutes. Not trade advice.</i>")
     return "\n\n".join(lines)
-
-
-def _name(sym):
-    return FUTURES.get(sym, sym)
-
-
-def _ix(sym):
-    return f" ({INDEXES[sym]} index)" if sym in INDEXES else ""
 
 
 def _d(iso):

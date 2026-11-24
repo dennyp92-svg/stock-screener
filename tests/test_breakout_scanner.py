@@ -157,7 +157,7 @@ def test_indexes_labelled():
     st = bs.setup_stats(make_bars())
     t = bs.fmt_trigger(dt.datetime(2026, 11, 12, 9, 45, tzinfo=bs.CT),
                        [("QQQ", {"price": 50.6, "above": 1.2, "rvol": 2.1, "new_52w": False}, st, False)])
-    assert "QQQ</b> (Nasdaq 100 index)" in t
+    assert "📊 INDEX <b>QQQ</b> — Nasdaq 100" in t and "INDEXES &amp; FUTURES" in t
 
 
 def test_nq_futures():
@@ -168,4 +168,9 @@ def test_nq_futures():
     assert bs.trigger(st, weak, noon) is None
     assert bs.trigger(st, weak, noon, need_volume=False)
     t = bs.fmt_trigger(noon, [("NQ=F", bs.trigger(st, weak, noon, need_volume=False), st, False)])
-    assert "<b>NQ</b> (Nasdaq 100 futures index)" in t and "volume not required" in t
+    assert "⚡ FUTURES <b>NQ</b> — Nasdaq 100 futures" in t and "volume not required" in t and "🏢 STOCKS" not in t
+
+
+def test_sp500_ampersand_escaped_for_telegram():
+    w = bs.fmt_watch(dt.date(2026, 11, 12), [("SPY", 80, bs.setup_stats(make_bars()))], "x", 1)
+    assert "S&amp;P 500" in w and "S&P" not in w
