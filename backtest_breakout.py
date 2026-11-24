@@ -7,6 +7,9 @@ Signals (same rules as breakout_scanner.py, on daily bars):
   from_watch   breakout that came out of a WATCH setup the day before (within 3% under the
                level, 10-day range <= 12%).
   no_vol       breakout without the volume rule (to see if the volume filter helps).
+  watch_2pct   from_watch, but only if the 10-day range was at least 2% (live WATCH rule since Nov 23 2026).
+  flat_under2  from_watch with a 10-day range under 2% (the "frozen" stocks the new rule drops).
+  mkt_ok_2pct  mkt_ok breakout with a 10-day range of at least 2%.
   mkt_ok       breakout only when SPY closed above its 50-day the day before (live rule since Nov 23 2026).
   close_hold   mkt_ok breakout that also CLOSED above the level; bought at that close. Daily-bar
                stand-in for the live "still above the level 30 min later" check.
@@ -74,6 +77,9 @@ def features(df, spy_ok=None):
            if spy_ok is not None else np.ones(len(f), bool))
     f["mkt_ok"] = f.breakout & mkt
     f["close_hold"] = f.mkt_ok & (f.c >= f.R * 1.002)
+    f["watch_2pct"] = f.from_watch & (f.range10 >= 2)
+    f["flat_under2"] = f.from_watch & (f.range10 < 2)
+    f["mkt_ok_2pct"] = f.mkt_ok & (f.range10 >= 2)
     return f
 
 
@@ -136,7 +142,7 @@ def run(bars, spy_ok=None):
         n_sig = int(f.breakout.sum())
         rand_days = f.index[f.up.fillna(False) & f.atr.notna()].to_numpy()
         rand_pick = set(rng.choice(rand_days, size=min(len(rand_days), max(2, 2 * n_sig)), replace=False)) if len(rand_days) else set()
-        for group in ("breakout", "from_watch", "no_vol", "mkt_ok", "close_hold", "random"):
+        for group in ("breakout", "from_watch", "watch_2pct", "flat_under2", "no_vol", "mkt_ok", "mkt_ok_2pct", "close_hold", "random"):
             days = sorted(rand_pick) if group == "random" else list(np.flatnonzero(f[group].fillna(False).to_numpy()))
             for sname, sfn in STOPS.items():
                 for rule in EXITS:

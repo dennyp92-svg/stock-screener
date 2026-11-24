@@ -11,9 +11,9 @@ def make_bars(n=260, base=50.0, tight_last=12, res_bump=1.0):
     days = pd.bdate_range(end="2026-11-11", periods=n).date
     close = np.linspace(base * 0.7, base, n)
     close[-tight_last:] = base * 0.985
-    high = close * 1.01
+    high = np.minimum(close * 1.015, base * 0.999)  # keep every other high under the level
     high[-15] = base * res_bump  # the 20-day high (resistance) = base
-    low = close * 0.99
+    low = close * 0.985
     vol = np.full(n, 2_000_000.0)
     vol[-5:] = 1_200_000  # drying up
     return pd.DataFrame({"Open": close, "High": high, "Low": low, "Close": close, "Volume": vol}, index=days)
@@ -25,6 +25,14 @@ def test_watch_finds_tight_base_near_resistance():
     assert 1.0 < st["dist"] < 2.0
     sc = bs.watch_score(st)
     assert sc is not None and sc >= 60
+
+
+def test_watch_rejects_frozen_flat_stock():
+    d = make_bars()
+    d.loc[d.index[-10:], "High"] = d["Close"].iloc[-10:] * 1.004   # 10-day range ~0.8%: buyout-style
+    d.loc[d.index[-10:], "Low"] = d["Close"].iloc[-10:] * 0.996
+    st = bs.setup_stats(d)
+    assert st["range10"] < 2 and bs.watch_score(st) is None
 
 
 def test_watch_rejects_downtrend_and_far_from_level():
