@@ -1,11 +1,13 @@
 """Breakout scanner -> its own Telegram bot.
 
 Two kinds of alerts, labelled separately:
-  🔭 WATCH     - "about to break out": uptrend, tight range sitting just under
-                 its 20-day high (resistance). Sent once each weekday morning.
-  🚀 TRIGGERED - "breaking out now": price has cleared that 20-day high on
-                 heavy volume. Checked every 30 min while the market is open;
-                 each stock is alerted at most once per day.
+  🔭 WATCH LIST - "about to break out" (NOT a buy yet): uptrend, tight range
+                  sitting just under its 20-day high (resistance). Sent once
+                  each weekday morning.
+  🚀 BREAKOUT   - "broke out, buy signal": price cleared that 20-day high on
+                  heavy volume AND was still above it at the next check 30 min
+                  later. No alerts in the first hour (9:30 CT on) and none while
+                  SPY is below its 50-day average. Each stock alerted at most once a day.
 
 Universe: US stocks (no ETFs/funds), price > $10, market cap > $1B,
 avg volume > 1M - from FMP's company screener, falling back to FMP's
@@ -59,6 +61,8 @@ WATCH_TOP_N = 10
 TRIGGER_MIN_BREAK = 0.2  # at least 0.2% above resistance
 TRIGGER_MAX_EXT = 5.0    # skip if already >5% above (too extended to chase)
 TRIGGER_MIN_RVOL = 1.5   # today's volume pace vs the 50-day average
+NO_TRIGGER_BEFORE = dt.time(9, 30)  # first hour skipped: opening volume makes every stock look "heavy"
+CONFIRM_MINUTES = 25     # must still be above the level at a check at least this long after first seen
 
 # Exits (best in the 5-year backtest)
 STOP_MAX_PCT = 10.0      # stop = 10-day low, but never more than 10% below entry
@@ -207,10 +211,35 @@ def watch_score(st, spy_ret_63=0.0):
     return round(score)
 
 
+# Rough share of a normal day's volume that has traded N minutes after the open.
+# Volume is heavy at the open and close, so this is not a straight line. Approximate
+# typical US large-cap pattern, not measured from your data.
+VOL_CURVE_MIN = [0, 30, 60, 90, 120, 180, 240, 300, 360, 390]
+VOL_CURVE_PCT = [0, 0.13, 0.21, 0.28, 0.34, 0.45, 0.56, 0.67, 0.80, 1.0]
+
+
 def session_fraction(now_ct):
-    """Share of the regular session (8:30-15:00 CT) that has passed, at least 5%."""
+    """Typical share of a day's volume done by now (8:30-15:00 CT session), at least 5%."""
     mins = (now_ct.hour * 60 + now_ct.minute) - (8 * 60 + 30)
-    return min(1.0, max(0.05, mins / 390))
+    return float(max(0.05, np.interp(mins, VOL_CURVE_MIN, VOL_CURVE_PCT)))
+
+
+def market_ok(spy_done):
+    """(ok, spy close, spy 50-day) from SPY's completed daily bars. ok = close above the 50-day."""
+    c = spy_done["Close"]
+    sma50 = float(c.rolling(50).mean().iloc[-1])
+    last = float(c.iloc[-1])
+    return last > sma50, last, sma50
+
+
+def confirm(state, sym, now_ct):
+    """True once `sym` has met the breakout rules at two checks >= CONFIRM_MINUTES apart."""
+    pend = state.setdefault("pending", {})
+    first = pend.get(sym)
+    if first is None:
+        pend[sym] = now_ct.isoformat()
+        return False
+    return (now_ct - dt.datetime.fromisoformat(first)).total_seconds() >= CONFIRM_MINUTES * 60
 
 
 def trigger(st, bar, now_ct):
@@ -229,14 +258,18 @@ def trigger(st, bar, now_ct):
 
 
 # ---------------------------------------------------------------- messages ---
-def fmt_watch(today, picks, source, scanned):
+def fmt_watch(today, picks, source, scanned, market=None):
     e = html.escape
-    lines = [f"<b>🔭 Breakout WATCH — {today.strftime('%a %b %-d')}</b>",
-             "<i>About to break out: tight, near the 20-day high, in an uptrend.</i>"]
+    lines = [f"<b>🔭 WATCH LIST — not a breakout yet — {today.strftime('%a %b %-d')}</b>",
+             "<i>Don't buy these yet. They're close to breaking out. If one really breaks out "
+             "you'll get a separate 🚀 BREAKOUT message.</i>"]
+    if market and not market[0]:
+        lines.append(f"⚠️ Market is weak (SPY ${market[1]:.2f} is below its 50-day ${market[2]:.2f}). "
+                     "Breakout alerts are paused until it's back above.")
     if not picks:
         lines.append("No setups passed the rules today.")
     for i, (s, sc, st) in enumerate(picks, 1):
-        lines.append(f"{i}. <b>{e(s)}</b> ${st['close']:.2f} — breakout over <b>${st['resistance']:.2f}</b> "
+        lines.append(f"{i}. <b>{e(s)}</b> ${st['close']:.2f} — needs to clear <b>${st['resistance']:.2f}</b> "
                      f"({st['dist']:.1f}% away)\n    score {sc} · 10-day range {st['range10']:.1f}%"
                      + (" · near 52-wk high" if st["resistance"] >= st["high_52w"] * 0.98 else ""))
     lines.append(f"<i>{scanned} stocks scanned ({e(source)}). Not trade advice — paper/test first.</i>")
@@ -245,11 +278,12 @@ def fmt_watch(today, picks, source, scanned):
 
 def fmt_trigger(now_ct, hits):
     e = html.escape
-    lines = [f"<b>🚀 Breakout TRIGGERED — {now_ct.strftime('%-I:%M %p')} CT</b>"]
+    lines = [f"<b>🚀 BREAKOUT — buy signal — {now_ct.strftime('%-I:%M %p')} CT</b>",
+             "<i>Broke above its 20-day high on heavy volume and held there for 30+ min.</i>"]
     for s, t, st, was_watched in hits:
         tags = []
         if was_watched:
-            tags.append("was on WATCH ✅")
+            tags.append("was on this morning's watch list ✅")
         if t["new_52w"]:
             tags.append("new 52-wk high")
         pl = plan(t["price"], st["low10"], now_ct.date())
@@ -433,7 +467,7 @@ def load_state(path, today):
     keep = {"positions": st.get("positions", {}), "tg_offset": st.get("tg_offset", 0)}
     if st.get("date") == today.isoformat():
         return {**st, **keep}
-    return {"date": today.isoformat(), "watch_sent": False, "watch": [], "triggered": [], **keep}
+    return {"date": today.isoformat(), "watch_sent": False, "watch": [], "triggered": [], "pending": {}, **keep}
 
 
 def save_state(path, st):
@@ -467,7 +501,7 @@ def main(now=None):
             send(alert)
 
     do_watch = force in ("watch", "both") or (not force and not state["watch_sent"] and WATCH_FROM <= t < WATCH_UNTIL)
-    do_trigger = force in ("trigger", "both") or (not force and OPEN <= t <= TRIGGER_UNTIL)
+    do_trigger = force in ("trigger", "both") or (not force and NO_TRIGGER_BEFORE <= t <= TRIGGER_UNTIL)
     if not (do_watch or do_trigger):
         print(f"{t.strftime('%H:%M')} CT: outside alert windows; nothing to do.")
         save_state(state_path, state)
@@ -476,10 +510,13 @@ def main(now=None):
     syms, source = universe(os.environ["FMP_KEY"])
     bars = daily_bars(syms + ["SPY"])
     spy = bars.pop("SPY", None)
-    spy_ret = 0.0
+    spy_ret, market = 0.0, None
     if spy is not None:
-        c = split_today(spy, today)[0]["Close"]
+        spy_done = split_today(spy, today)[0]
+        c = spy_done["Close"]
         spy_ret = float(c.iloc[-1] / c.iloc[-63] - 1)
+        market = market_ok(spy_done)
+        print(f"market: SPY {market[1]:.2f} vs 50-day {market[2]:.2f} -> {'OK' if market[0] else 'WEAK, breakouts paused'}")
     print(f"universe: {len(syms)} from {source}; bars for {len(bars)}")
 
     stats, today_bar = {}, {}
@@ -497,21 +534,26 @@ def main(now=None):
         scored = [(s, watch_score(st, spy_ret), st) for s, st in stats.items()]
         picks = sorted([x for x in scored if x[1] is not None], key=lambda x: -x[1])[:WATCH_TOP_N]
         print(f"watch setups passing: {sum(1 for x in scored if x[1] is not None)}")
-        send(fmt_watch(today, picks, source, len(stats)))
+        send(fmt_watch(today, picks, source, len(stats), market))
         state["watch_sent"] = True
         state["watch"] = [s for s, _, _ in picks]
 
     if do_trigger:
         if not any(b is not None for b in today_bar.values()):
             print("No bars for today yet (pre-market or holiday); no trigger check.")
+        elif market is not None and not market[0] and force not in ("trigger", "both"):
+            print("SPY below its 50-day; breakout alerts paused.")
         else:
-            hits = []
+            hits, pend = [], state.setdefault("pending", {})
             for s, st in stats.items():
                 if s in state["triggered"]:
                     continue
                 tr = trigger(st, today_bar[s], now)
-                if tr:
+                if not tr:
+                    pend.pop(s, None)  # fell back under (or volume faded): has to start over
+                elif confirm(state, s, now):
                     hits.append((s, tr, st, s in state["watch"]))
+            print(f"waiting for confirmation: {[s for s in pend if s not in state['triggered'] and s not in [h[0] for h in hits]]}")
             hits.sort(key=lambda h: (not h[3], -h[1]["rvol"]))
             print(f"new triggers: {[h[0] for h in hits]}")
             if hits:

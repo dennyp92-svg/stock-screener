@@ -58,10 +58,10 @@ def test_split_today_separates_partial_bar():
 def test_messages_render():
     st = bs.setup_stats(make_bars())
     w = bs.fmt_watch(dt.date(2026, 11, 12), [("ABC", 80, st)], "FMP screener", 900)
-    assert "WATCH" in w and "ABC" in w and "$50.00" in w
+    assert "WATCH LIST" in w and "not a breakout" in w and "ABC" in w and "$50.00" in w
     t = bs.fmt_trigger(dt.datetime(2026, 11, 12, 9, 45, tzinfo=bs.CT),
                        [("ABC", {"price": 50.6, "above": 1.2, "rvol": 2.1, "new_52w": True}, st, True)])
-    assert "TRIGGERED" in t and "was on WATCH" in t and "new 52-wk high" in t
+    assert "BREAKOUT" in t and "watch list" in t and "new 52-wk high" in t
 
 
 def test_state_resets_each_day(tmp_path):
@@ -119,3 +119,25 @@ def test_handle_commands_buy_sell_list(monkeypatch):
     assert state["positions"]["ABC"]["entry"] == 50.0
     out = bs.handle_commands(state, [("sell", "ABC", None)], today, None)
     assert "Stopped tracking" in out and state["positions"] == {}
+
+
+def test_confirm_needs_two_checks_25_min_apart():
+    state = {}
+    t0 = dt.datetime(2026, 11, 12, 10, 0, tzinfo=bs.CT)
+    assert not bs.confirm(state, "ABC", t0)                          # first sighting
+    assert not bs.confirm(state, "ABC", t0 + dt.timedelta(minutes=5))  # too soon
+    assert bs.confirm(state, "ABC", t0 + dt.timedelta(minutes=30))
+
+
+def test_early_volume_not_overstated():
+    # 30 min in, a normal day has ~13% of its volume done, not 7.7%
+    assert abs(bs.session_fraction(dt.datetime(2026, 11, 12, 9, 0, tzinfo=bs.CT)) - 0.13) < 1e-9
+    assert bs.session_fraction(dt.datetime(2026, 11, 12, 15, 0, tzinfo=bs.CT)) == 1.0
+
+
+def test_market_filter():
+    up = pd.DataFrame({"Close": np.linspace(100, 120, 80)})
+    down = pd.DataFrame({"Close": np.linspace(120, 100, 80)})
+    assert bs.market_ok(up)[0] and not bs.market_ok(down)[0]
+    w = bs.fmt_watch(dt.date(2026, 11, 12), [], "x", 1, (False, 690.0, 730.0))
+    assert "paused" in w

@@ -7,6 +7,9 @@ Signals (same rules as breakout_scanner.py, on daily bars):
   from_watch   breakout that came out of a WATCH setup the day before (within 3% under the
                level, 10-day range <= 12%).
   no_vol       breakout without the volume rule (to see if the volume filter helps).
+  mkt_ok       breakout only when SPY closed above its 50-day the day before (live rule since Nov 23 2026).
+  close_hold   mkt_ok breakout that also CLOSED above the level; bought at that close. Daily-bar
+               stand-in for the live "still above the level 30 min later" check.
   random       random uptrend days, bought at the open (the baseline any edge must beat).
 
 Entry: max(open, level * 1.002) - a buy-stop at the breakout level. 0.1% round-trip cost.
@@ -43,7 +46,7 @@ STOPS = {
 EXITS = ["2R target", "3R target", "trail 10EMA", "half 1.5R + trail", "3%/6% halves (quant bot)"]
 
 
-def features(df):
+def features(df, spy_ok=None):
     c, h, l, o, v = (df[k].to_numpy(float) for k in ("Close", "High", "Low", "Open", "Volume"))
     s = lambda a: pd.Series(a)
     prev_c = s(c).shift(1)
@@ -67,7 +70,18 @@ def features(df):
     f["no_vol"] = brk
     f["breakout"] = brk & (f.v >= 1.5 * f.avgv)
     f["from_watch"] = f.breakout & f.dist.between(0, 3) & (f.range10 <= 12)
+    mkt = (pd.Series(df.index).map(spy_ok).fillna(False).astype(bool).to_numpy()
+           if spy_ok is not None else np.ones(len(f), bool))
+    f["mkt_ok"] = f.breakout & mkt
+    f["close_hold"] = f.mkt_ok & (f.c >= f.R * 1.002)
     return f
+
+
+def spy_filter(spy):
+    """{date: True if SPY's PREVIOUS close was above its 50-day} - known before that day's open."""
+    c = spy["Close"]
+    ok = (c > c.rolling(50).mean()).shift(1)
+    return {d: bool(v) for d, v in ok.dropna().items()}
 
 
 def simulate(a, t, e, stop, rule):
@@ -111,10 +125,10 @@ def simulate(a, t, e, stop, rule):
     return pnl * 100 - COST * 100, last - t, last
 
 
-def run(bars):
+def run(bars, spy_ok=None):
     rows = []
     for sym, df in bars.items():
-        f = features(df)
+        f = features(df, spy_ok)
         if len(f) < 260:
             continue
         a = {k: f[k].to_numpy(float) for k in ("o", "h", "l", "c", "ema10", "R", "atr", "low10")}
@@ -122,7 +136,7 @@ def run(bars):
         n_sig = int(f.breakout.sum())
         rand_days = f.index[f.up.fillna(False) & f.atr.notna()].to_numpy()
         rand_pick = set(rng.choice(rand_days, size=min(len(rand_days), max(2, 2 * n_sig)), replace=False)) if len(rand_days) else set()
-        for group in ("breakout", "from_watch", "no_vol", "random"):
+        for group in ("breakout", "from_watch", "no_vol", "mkt_ok", "close_hold", "random"):
             days = sorted(rand_pick) if group == "random" else list(np.flatnonzero(f[group].fillna(False).to_numpy()))
             for sname, sfn in STOPS.items():
                 for rule in EXITS:
@@ -133,7 +147,8 @@ def run(bars):
                         if t <= busy_until or t < 200:
                             continue
                         x = {"R": a["R"][t], "atr": a["atr"][t], "low10": a["low10"][t]}
-                        e = a["o"][t] if group == "random" else max(a["o"][t], x["R"] * 1.002)
+                        e = (a["o"][t] if group == "random" else a["c"][t] if group == "close_hold"
+                             else max(a["o"][t], x["R"] * 1.002))
                         stop = e * 0.97 if rule.startswith("3%/6%") else sfn(e, x)
                         if np.isnan(stop) or (e - stop) / e > 0.15:
                             continue
@@ -164,9 +179,11 @@ def summarize(tr):
 def main():
     years = int(os.getenv("YEARS", "5"))
     syms, source = bs.universe(os.environ["FMP_KEY"])
-    bars = bs.daily_bars(syms, period=f"{years}y")
-    print(f"universe {len(syms)} from {source}; bars for {len(bars)}; {years} years")
-    tr = run(bars)
+    bars = bs.daily_bars(syms + ["SPY"], period=f"{years}y")
+    spy = bars.pop("SPY", None)
+    spy_ok = spy_filter(spy) if spy is not None else None
+    print(f"universe {len(syms)} from {source}; bars for {len(bars)}; {years} years; SPY filter {'on' if spy_ok else 'MISSING'}")
+    tr = run(bars, spy_ok)
     tr.to_csv("breakout_backtest_trades.csv", index=False)
     s = summarize(tr)
     s.to_csv("breakout_backtest_summary.csv", index=False)
