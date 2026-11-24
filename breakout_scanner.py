@@ -56,6 +56,7 @@ MAX_UNIVERSE = 1500
 LOOKBACK = 20            # resistance = highest high of the last 20 completed days
 WATCH_MAX_DIST = 3.0     # within 3% below resistance
 WATCH_MAX_RANGE = 12.0   # last 10 days' high-low range, % of price
+WATCH_MIN_RANGE = 2.0    # ...but not frozen flat: under 2% usually means a buyout at a fixed price
 WATCH_TOP_N = 10
 
 # Trigger rules
@@ -202,10 +203,10 @@ def in_uptrend(st):
 
 def watch_score(st, spy_ret_63=0.0):
     """0-100 score for an 'about to break out' setup, or None if it doesn't qualify."""
-    if not in_uptrend(st) or not (0 <= st["dist"] <= WATCH_MAX_DIST) or st["range10"] > WATCH_MAX_RANGE:
+    if not in_uptrend(st) or not (0 <= st["dist"] <= WATCH_MAX_DIST) or not (WATCH_MIN_RANGE <= st["range10"] <= WATCH_MAX_RANGE):
         return None
     score = 30 * (1 - st["dist"] / WATCH_MAX_DIST)                       # close to the level
-    score += 25 * max(0.0, 1 - st["range10"] / WATCH_MAX_RANGE)          # tight range
+    score += 25 * max(0.0, 1 - (st["range10"] - WATCH_MIN_RANGE) / (WATCH_MAX_RANGE - WATCH_MIN_RANGE))  # tight range
     score += 15 * min(1.0, max(0.0, (1 - st["atr_ratio"]) / 0.5))        # volatility contracting
     score += 10 * min(1.0, max(0.0, (1 - st["vol_ratio"]) / 0.5))        # volume drying up
     score += 10                                                           # uptrend (required)
