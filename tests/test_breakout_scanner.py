@@ -151,3 +151,10 @@ def test_market_filter():
     assert bs.market_ok(up)[0] and not bs.market_ok(down)[0]
     w = bs.fmt_watch(dt.date(2026, 11, 12), [], "x", 1, (False, 690.0, 730.0))
     assert "paused" in w
+
+
+def test_indexes_labelled():
+    st = bs.setup_stats(make_bars())
+    t = bs.fmt_trigger(dt.datetime(2026, 11, 12, 9, 45, tzinfo=bs.CT),
+                       [("QQQ", {"price": 50.6, "above": 1.2, "rvol": 2.1, "new_52w": False}, st, False)])
+    assert "QQQ</b> (Nasdaq 100 index)" in t

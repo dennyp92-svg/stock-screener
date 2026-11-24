@@ -10,7 +10,7 @@ Two kinds of alerts, labelled separately:
                   for the breakout to hold until the close lowered it, so the
                   wait-to-confirm rule is off). Each stock alerted at most once a day.
 
-Universe: US stocks (no ETFs/funds), price > $10, market cap > $1B,
+Universe: the index funds SPY, QQQ (Nasdaq 100), IWM (Russell 2000), DIA (Dow), plus US stocks (no other ETFs/funds), price > $10, market cap > $1B,
 avg volume > 1M - from FMP's company screener, falling back to FMP's
 most-actives/gainers lists if the screener isn't available on the plan.
 Daily bars come from Yahoo Finance (yfinance), which includes today's
@@ -51,6 +51,7 @@ MIN_PRICE = 10
 MIN_MCAP = 1_000_000_000
 MIN_AVG_VOL = 1_000_000
 MAX_UNIVERSE = 1500
+INDEXES = {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow"}  # always scanned
 
 # Setup rules
 LOOKBACK = 20            # resistance = highest high of the last 20 completed days
@@ -270,11 +271,12 @@ def fmt_watch(today, picks, source, scanned, market=None):
              "you'll get a separate 🚀 BREAKOUT message.</i>"]
     if market and not market[0]:
         lines.append(f"⚠️ Market is weak (SPY ${market[1]:.2f} is below its 50-day ${market[2]:.2f}). "
-                     "Breakout alerts are paused until it's back above.")
+                     "Stock breakout alerts are paused until it's back above; "
+                     "SPY, QQQ, IWM and DIA breakouts still come through.")
     if not picks:
         lines.append("No setups passed the rules today.")
     for i, (s, sc, st) in enumerate(picks, 1):
-        lines.append(f"{i}. <b>{e(s)}</b> ${st['close']:.2f} — needs to clear <b>${st['resistance']:.2f}</b> "
+        lines.append(f"{i}. <b>{e(s)}</b>{_ix(s)} ${st['close']:.2f} — needs to clear <b>${st['resistance']:.2f}</b> "
                      f"({st['dist']:.1f}% away)\n    score {sc} · 10-day range {st['range10']:.1f}%"
                      + (" · near 52-wk high" if st["resistance"] >= st["high_52w"] * 0.98 else ""))
     lines.append(f"<i>{scanned} stocks scanned ({e(source)}). Not trade advice — paper/test first.</i>")
@@ -292,13 +294,17 @@ def fmt_trigger(now_ct, hits):
         if t["new_52w"]:
             tags.append("new 52-wk high")
         pl = plan(t["price"], st["low10"], now_ct.date())
-        lines.append(f"• <b>{e(s)}</b> ${t['price']:.2f} — {t['above']:.1f}% over ${st['resistance']:.2f} · "
+        lines.append(f"• <b>{e(s)}</b>{_ix(s)} ${t['price']:.2f} — {t['above']:.1f}% over ${st['resistance']:.2f} · "
                      f"volume pace {t['rvol']:.1f}x" + (f"\n    {' · '.join(tags)}" if tags else "")
                      + f"\n    🟢 Buy ~${pl['entry']:.2f} · 🛑 stop ${pl['stop']:.2f} · 🎯 target ${pl['target']:.2f}"
                      f" · ⏰ sell by {_d(pl['sell_by'])}")
     lines.append("<i>Bought one? Text me <b>buy TICKER</b> (add your price, e.g. buy NVDA 182.50) "
                  "and I'll tell you when to sell. Prices from Yahoo, can lag a few minutes. Not trade advice.</i>")
     return "\n\n".join(lines)
+
+
+def _ix(sym):
+    return f" ({INDEXES[sym]} index)" if sym in INDEXES else ""
 
 
 def _d(iso):
@@ -513,8 +519,9 @@ def main(now=None):
         return 0
 
     syms, source = universe(os.environ["FMP_KEY"])
-    bars = daily_bars(syms + ["SPY"])
-    spy = bars.pop("SPY", None)
+    syms = list(INDEXES) + [s for s in syms if s not in INDEXES]
+    bars = daily_bars(syms)
+    spy = bars.get("SPY")
     spy_ret, market = 0.0, None
     if spy is not None:
         spy_done = split_today(spy, today)[0]
@@ -546,12 +553,14 @@ def main(now=None):
     if do_trigger:
         if not any(b is not None for b in today_bar.values()):
             print("No bars for today yet (pre-market or holiday); no trigger check.")
-        elif market is not None and not market[0] and force not in ("trigger", "both"):
-            print("SPY below its 50-day; breakout alerts paused.")
         else:
+            # Weak market: stock breakouts paused, but an index breaking out is still alerted.
+            paused = market is not None and not market[0] and force not in ("trigger", "both")
+            if paused:
+                print("SPY below its 50-day; stock breakouts paused, indexes still checked.")
             hits, pend = [], state.setdefault("pending", {})
             for s, st in stats.items():
-                if s in state["triggered"]:
+                if s in state["triggered"] or (paused and s not in INDEXES):
                     continue
                 tr = trigger(st, today_bar[s], now)
                 if not tr:
@@ -559,7 +568,7 @@ def main(now=None):
                 elif confirm(state, s, now):
                     hits.append((s, tr, st, s in state["watch"]))
             print(f"waiting for confirmation: {[s for s in pend if s not in state['triggered'] and s not in [h[0] for h in hits]]}")
-            hits.sort(key=lambda h: (not h[3], -h[1]["rvol"]))
+            hits.sort(key=lambda h: (h[0] not in INDEXES, not h[3], -h[1]["rvol"]))
             print(f"new triggers: {[h[0] for h in hits]}")
             if hits:
                 send(fmt_trigger(now, hits[:15]))
