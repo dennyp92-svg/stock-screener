@@ -206,13 +206,14 @@ def main():
         print(f"\n--- by year: {g} | {st} | {ex} ---\n" + by.to_string())
     if ix_bars:
         ix = run(ix_bars, spy_ok)
-        ix = ix[ix.group.isin(["breakout", "mkt_ok", "random"])]
+        ix = ix[ix.group.isin(["breakout", "no_vol", "mkt_ok", "random"])]
         s_ix = summarize(ix) if len(ix) else pd.DataFrame()
-        print("\n=== INDEXES ONLY (SPY, QQQ, IWM, DIA) ===\n" + s_ix.sort_values(["group", "avg%"], ascending=[True, False]).to_string(index=False))
-        per = ix[(ix.group == "breakout") & (ix.stop == "base low") & (ix.exit == "3R target")]
-        if len(per):
-            print("\n--- per index: breakout | base low | 3R target ---\n"
-                  + per.groupby("symbol").ret.agg(["count", "mean", lambda r: (r > 0).mean() * 100]).round(2).to_string())
+        print("\n=== INDEXES ONLY (SPY, QQQ, IWM, DIA, NQ futures; NQ live alerts skip the volume rule = no_vol) ===\n" + s_ix.sort_values(["group", "avg%"], ascending=[True, False]).to_string(index=False))
+        for grp in ("breakout", "no_vol"):
+            per = ix[(ix.group == grp) & (ix.stop == "base low") & (ix.exit == "3R target")]
+            if len(per):
+                print(f"\n--- per index: {grp} | base low | 3R target ---\n"
+                      + per.groupby("symbol").ret.agg(["count", "mean", lambda r: (r > 0).mean() * 100]).round(2).to_string())
     summ = os.getenv("GITHUB_STEP_SUMMARY")
     if summ:
         with open(summ, "a") as fh:

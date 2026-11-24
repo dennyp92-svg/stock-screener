@@ -51,7 +51,13 @@ MIN_PRICE = 10
 MIN_MCAP = 1_000_000_000
 MIN_AVG_VOL = 1_000_000
 MAX_UNIVERSE = 1500
-INDEXES = {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow"}  # always scanned
+INDEXES = {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow",
+           "NQ=F": "Nasdaq 100 futures"}  # always scanned
+# No volume rule for indexes/futures: 5-yr backtest, index breakouts WITH it averaged -0.5% (23 trades),
+# WITHOUT it +0.9% (120 trades, 57% wins). NQ=F is Yahoo's continuous front-month (jumps at each
+# quarterly roll). Text the bot "buy NQ".
+FUTURES = {"NQ=F": "NQ"}
+ALIASES = {v: k for k, v in FUTURES.items()}
 
 # Setup rules
 LOOKBACK = 20            # resistance = highest high of the last 20 completed days
@@ -248,7 +254,7 @@ def confirm(state, sym, now_ct):
     return (now_ct - dt.datetime.fromisoformat(first)).total_seconds() >= CONFIRM_MINUTES * 60
 
 
-def trigger(st, bar, now_ct):
+def trigger(st, bar, now_ct, need_volume=True):
     """Returns breakout details if today's bar has broken out, else None."""
     if bar is None or not in_uptrend(st):
         return None
@@ -256,8 +262,8 @@ def trigger(st, bar, now_ct):
     above = (price - st["resistance"]) / st["resistance"] * 100
     if not (TRIGGER_MIN_BREAK <= above <= TRIGGER_MAX_EXT):
         return None
-    rvol = vol / (st["avg_vol50"] * session_fraction(now_ct))
-    if rvol < TRIGGER_MIN_RVOL:
+    rvol = vol / (st["avg_vol50"] * session_fraction(now_ct)) if st["avg_vol50"] > 0 else 0.0
+    if need_volume and rvol < TRIGGER_MIN_RVOL:
         return None
     return {"price": price, "above": above, "rvol": rvol,
             "new_52w": price >= st["high_52w"]}
@@ -276,7 +282,7 @@ def fmt_watch(today, picks, source, scanned, market=None):
     if not picks:
         lines.append("No setups passed the rules today.")
     for i, (s, sc, st) in enumerate(picks, 1):
-        lines.append(f"{i}. <b>{e(s)}</b>{_ix(s)} ${st['close']:.2f} — needs to clear <b>${st['resistance']:.2f}</b> "
+        lines.append(f"{i}. <b>{e(_name(s))}</b>{_ix(s)} ${st['close']:.2f} — needs to clear <b>${st['resistance']:.2f}</b> "
                      f"({st['dist']:.1f}% away)\n    score {sc} · 10-day range {st['range10']:.1f}%"
                      + (" · near 52-wk high" if st["resistance"] >= st["high_52w"] * 0.98 else ""))
     lines.append(f"<i>{scanned} stocks scanned ({e(source)}). Not trade advice — paper/test first.</i>")
@@ -294,13 +300,17 @@ def fmt_trigger(now_ct, hits):
         if t["new_52w"]:
             tags.append("new 52-wk high")
         pl = plan(t["price"], st["low10"], now_ct.date())
-        lines.append(f"• <b>{e(s)}</b>{_ix(s)} ${t['price']:.2f} — {t['above']:.1f}% over ${st['resistance']:.2f} · "
-                     f"volume pace {t['rvol']:.1f}x" + (f"\n    {' · '.join(tags)}" if tags else "")
+        lines.append(f"• <b>{e(_name(s))}</b>{_ix(s)} ${t['price']:.2f} — {t['above']:.1f}% over ${st['resistance']:.2f} · "
+                     + (f"volume pace {t['rvol']:.1f}x" if s not in INDEXES else "index: volume not required") + (f"\n    {' · '.join(tags)}" if tags else "")
                      + f"\n    🟢 Buy ~${pl['entry']:.2f} · 🛑 stop ${pl['stop']:.2f} · 🎯 target ${pl['target']:.2f}"
                      f" · ⏰ sell by {_d(pl['sell_by'])}")
     lines.append("<i>Bought one? Text me <b>buy TICKER</b> (add your price, e.g. buy NVDA 182.50) "
                  "and I'll tell you when to sell. Prices from Yahoo, can lag a few minutes. Not trade advice.</i>")
     return "\n\n".join(lines)
+
+
+def _name(sym):
+    return FUTURES.get(sym, sym)
 
 
 def _ix(sym):
@@ -312,7 +322,7 @@ def _d(iso):
 
 
 def fmt_position(sym, p):
-    return (f"<b>{html.escape(sym)}</b> bought ${p['entry']:.2f} · 🛑 ${p['stop']:.2f} · "
+    return (f"<b>{html.escape(_name(sym))}</b> bought ${p['entry']:.2f} · 🛑 ${p['stop']:.2f} · "
             f"🎯 ${p['target']:.2f} · ⏰ {_d(p['sell_by'])}")
 
 
@@ -334,7 +344,8 @@ def parse_command(text):
                 price = float(parts[2])
             except ValueError:
                 pass
-        return ("buy" if cmd in ("buy", "bought") else "sell", parts[1].upper(), price)
+        sym = parts[1].upper()
+        return ("buy" if cmd in ("buy", "bought") else "sell", ALIASES.get(sym, sym), price)
     return None
 
 
@@ -417,7 +428,7 @@ def exit_alerts(state, today, now_ct):
         if why:
             last = f" (now ${float(bar['Close']):.2f})" if bar is not None else ""
             chg = (float(bar["Close"]) / p["entry"] - 1) * 100 if bar is not None else None
-            lines.append(f"<b>{html.escape(sym)}</b>: {why}{last}"
+            lines.append(f"<b>{html.escape(_name(sym))}</b>: {why}{last}"
                          + (f" · {chg:+.1f}% from ${p['entry']:.2f}" if chg is not None else ""))
             pos.pop(sym)
     if not lines:
@@ -562,7 +573,7 @@ def main(now=None):
             for s, st in stats.items():
                 if s in state["triggered"] or (paused and s not in INDEXES):
                     continue
-                tr = trigger(st, today_bar[s], now)
+                tr = trigger(st, today_bar[s], now, need_volume=s not in INDEXES)
                 if not tr:
                     pend.pop(s, None)  # fell back under (or volume faded): has to start over
                 elif confirm(state, s, now):

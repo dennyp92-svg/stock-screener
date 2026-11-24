@@ -158,3 +158,14 @@ def test_indexes_labelled():
     t = bs.fmt_trigger(dt.datetime(2026, 11, 12, 9, 45, tzinfo=bs.CT),
                        [("QQQ", {"price": 50.6, "above": 1.2, "rvol": 2.1, "new_52w": False}, st, False)])
     assert "QQQ</b> (Nasdaq 100 index)" in t
+
+
+def test_nq_futures():
+    assert bs.parse_command("buy nq 21000") == ("buy", "NQ=F", 21000.0)
+    st = bs.setup_stats(make_bars())
+    noon = dt.datetime(2026, 11, 12, 11, 45, tzinfo=bs.CT)
+    weak = pd.Series({"Close": 50.6, "Volume": 1.0})
+    assert bs.trigger(st, weak, noon) is None
+    assert bs.trigger(st, weak, noon, need_volume=False)
+    t = bs.fmt_trigger(noon, [("NQ=F", bs.trigger(st, weak, noon, need_volume=False), st, False)])
+    assert "<b>NQ</b> (Nasdaq 100 futures index)" in t and "volume not required" in t
