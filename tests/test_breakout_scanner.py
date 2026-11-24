@@ -109,12 +109,46 @@ def test_parse_command():
 
 
 def test_check_exit():
-    p = {"entry": 100, "stop": 95, "target": 115, "sell_by": "2026-12-10"}
+    p = {"entry": 100, "stop": 95, "target": 115, "sell_by": "2026-12-10", "bought": "2026-11-18"}
     today = dt.date(2026, 11, 20)
-    assert "STOP" in bs.check_exit(p, pd.Series({"Low": 94.9, "High": 101, "Close": 96}), today)
-    assert "TARGET" in bs.check_exit(p, pd.Series({"Low": 110, "High": 115.2, "Close": 114}), today)
+    assert bs.check_exit(p, pd.Series({"Low": 94.9, "High": 101, "Close": 96}), today) == ("loss", 95)
+    assert bs.check_exit(p, pd.Series({"Low": 110, "High": 115.2, "Close": 114}), today) == ("profit", 115)
     assert bs.check_exit(p, pd.Series({"Low": 99, "High": 105, "Close": 104}), today) is None
-    assert "20 trading days" in bs.check_exit(p, None, dt.date(2026, 12, 10))
+    assert bs.check_exit(p, None, dt.date(2026, 12, 10))[0] == "time"
+    # buy day: the low from before the alert doesn't count, only the current price
+    p2 = {**p, "bought": "2026-11-20"}
+    assert bs.check_exit(p2, pd.Series({"Low": 90, "High": 101, "Close": 100.5}), today) is None
+
+
+def test_breakout_alert_auto_tracks_and_sells(monkeypatch, tmp_path):
+    today = dt.date(2026, 11, 12)
+    d = make_bars()
+    abc = pd.concat([d, pd.DataFrame({"Open": [49.5], "High": [50.8], "Low": [49.4], "Close": [50.6],
+                                      "Volume": [3_000_000.0]}, index=[today])])
+    spy = pd.DataFrame({k: np.linspace(600, 700, 260) for k in ["Open", "High", "Low", "Close"]} | {"Volume": np.ones(260)},
+                       index=list(pd.bdate_range(end="2026-11-11", periods=260).date))
+    sent = []
+    monkeypatch.setattr(bs, "universe", lambda k: (["ABC"], "test"))
+    monkeypatch.setattr(bs, "daily_bars", lambda s, **k: {"ABC": abc, "SPY": spy})
+    monkeypatch.setattr(bs, "send", sent.append)
+    monkeypatch.setenv("FMP_KEY", "x")
+    monkeypatch.setenv("STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("FORCE", raising=False)
+    bs.main(dt.datetime(2026, 11, 12, 10, 0, tzinfo=bs.CT))
+    assert any("BREAKOUT" in m and "no need to text me" in m for m in sent)
+    st = bs.load_state(str(tmp_path / "s.json"), today)
+    assert "ABC" in st["positions"]
+    # next day it rips through the target -> TAKE PROFIT, and tracking stops
+    tgt = st["positions"]["ABC"]["target"]
+    nxt = dt.date(2026, 11, 13)
+    abc2 = pd.concat([abc, pd.DataFrame({"Open": [51], "High": [tgt + 1], "Low": [50.5], "Close": [tgt],
+                                         "Volume": [3e6]}, index=[nxt])])
+    monkeypatch.setattr(bs, "daily_bars", lambda s, **k: {"ABC": abc2, "SPY": spy})
+    sent.clear()
+    bs.main(dt.datetime(2026, 11, 13, 10, 0, tzinfo=bs.CT))
+    assert any("TAKE PROFIT" in m and "ABC" in m for m in sent)
+    assert "ABC" not in bs.load_state(str(tmp_path / "s.json"), nxt)["positions"]
 
 
 def test_handle_commands_buy_sell_list(monkeypatch):
