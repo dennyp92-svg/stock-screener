@@ -335,8 +335,9 @@ def fmt_trigger(now_ct, hits):
                 + f"\n    🟢 Buy ~${pl['entry']:.2f} · 🛑 stop ${pl['stop']:.2f} · 🎯 target ${pl['target']:.2f}"
                 f" · ⏰ sell by {_d(pl['sell_by'])}")
     lines += _sections(hits, lambda x: x[0], row)
-    lines.append("<i>Bought one? Text me <b>buy TICKER</b> (add your price, e.g. buy NVDA 182.50, or buy NQ) "
-                 "and I'll tell you when to sell. Prices from Yahoo, can lag a few minutes. Not trade advice.</i>")
+    lines.append("<i>I'm tracking these for you — no need to text me. I'll message you when to sell: "
+                 "💰 TAKE PROFIT, 🛑 STOP LOSS, or ⏰ TIME'S UP. Checked every 30 min while the market's open. "
+                 "Prices from Yahoo, can lag a few minutes. Not trade advice.</i>")
     return "\n\n".join(lines)
 
 
@@ -373,15 +374,24 @@ def parse_command(text):
 
 
 def check_exit(p, bar, today):
-    """Returns the reason to sell now, or None. `bar` is today's bar (or None)."""
+    """('loss'|'profit'|'time', exit price) if it's time to sell, else None. `bar` = today's bar or None.
+    On the buy day only the current price counts (the day's low/high may be from before the alert)."""
     if bar is not None:
-        if float(bar["Low"]) <= p["stop"]:
-            return f"🛑 STOP hit (${p['stop']:.2f}) — sell"
-        if float(bar["High"]) >= p["target"]:
-            return f"🎯 TARGET hit (${p['target']:.2f}) — sell"
+        same_day = p.get("bought") == today.isoformat()
+        lo = float(bar["Close"]) if same_day else float(bar["Low"])
+        hi = float(bar["Close"]) if same_day else float(bar["High"])
+        if lo <= p["stop"]:
+            return "loss", min(p["stop"], float(bar["Close"])) if same_day else p["stop"]
+        if hi >= p["target"]:
+            return "profit", p["target"]
     if today.isoformat() >= p["sell_by"]:
-        return "⏰ 20 trading days are up — sell"
+        return "time", float(bar["Close"]) if bar is not None else p["entry"]
     return None
+
+
+EXIT_TEXT = {"profit": "💰 TAKE PROFIT — sell now (target ${lvl:.2f} reached)",
+             "loss": "🛑 STOP LOSS — sell now (fell to the ${lvl:.2f} stop)",
+             "time": "⏰ TIME'S UP — sell now (20 trading days, neither stop nor target hit)"}
 
 
 def read_commands(state, token, chat):
@@ -447,17 +457,19 @@ def exit_alerts(state, today, now_ct):
     for sym, p in list(pos.items()):
         df = bars.get(sym)
         bar = split_today(df, today)[1] if df is not None else None
-        why = check_exit(p, bar, today)
-        if why:
-            last = f" (now ${float(bar['Close']):.2f})" if bar is not None else ""
-            chg = (float(bar["Close"]) / p["entry"] - 1) * 100 if bar is not None else None
-            lines.append(f"<b>{html.escape(_name(sym))}</b>: {why}{last}"
-                         + (f" · {chg:+.1f}% from ${p['entry']:.2f}" if chg is not None else ""))
+        ex = check_exit(p, bar, today)
+        if ex:
+            kind, px = ex
+            lvl = p["target"] if kind == "profit" else p["stop"]
+            now_px = f" · now ${float(bar['Close']):.2f}" if bar is not None else ""
+            lines.append(f"{_kind(sym)} <b>{html.escape(_name(sym))}</b>{_ix(sym)}\n    "
+                         + EXIT_TEXT[kind].format(lvl=lvl)
+                         + f"\n    bought ${p['entry']:.2f} on {_d(p['bought'])} → about {(px / p['entry'] - 1) * 100:+.1f}%{now_px}")
             pos.pop(sym)
     if not lines:
         return None
-    return (f"<b>🔔 SELL alert — {now_ct.strftime('%-I:%M %p')} CT</b>\n\n" + "\n\n".join(lines)
-            + "\n\n<i>Stopped tracking these. Not trade advice.</i>")
+    return (f"<b>🔔 SELL — {now_ct.strftime('%-I:%M %p')} CT</b>\n\n" + "\n\n".join(lines)
+            + "\n\n<i>Done tracking these. Not trade advice.</i>")
 
 
 # ---------------------------------------------------------------- telegram ---
@@ -607,6 +619,10 @@ def main(now=None):
             if hits:
                 send(fmt_trigger(now, hits[:15]))
                 state["triggered"] += [h[0] for h in hits]
+                pos = state.setdefault("positions", {})
+                for s, tr, st, _ in hits[:15]:   # auto-track every alerted breakout for sell alerts
+                    if s not in pos:
+                        pos[s] = plan(tr["price"], st["low10"], today)
 
     save_state(state_path, state)
     return 0
