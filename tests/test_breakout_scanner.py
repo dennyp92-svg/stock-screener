@@ -168,4 +168,4 @@ def test_nq_futures():
     assert bs.trigger(st, weak, noon) is None
     assert bs.trigger(st, weak, noon, need_volume=False)
     t = bs.fmt_trigger(noon, [("NQ=F", bs.trigger(st, weak, noon, need_volume=False), st, False)])
-    assert "<b>NQ</b> (Nasdaq 100 futures index)" in t and "volume not checked" in t
+    assert "<b>NQ</b> (Nasdaq 100 futures index)" in t and "volume not required" in t
