@@ -185,11 +185,12 @@ def summarize(tr):
 def main():
     years = int(os.getenv("YEARS", "5"))
     syms, source = bs.universe(os.environ["FMP_KEY"])
-    bars = bs.daily_bars(syms + ["SPY"], period=f"{years}y")
-    spy = bars.pop("SPY", None)
+    bars = bs.daily_bars(list(bs.INDEXES) + [s for s in syms if s not in bs.INDEXES], period=f"{years}y")
+    spy = bars.get("SPY")
     spy_ok = spy_filter(spy) if spy is not None else None
     print(f"universe {len(syms)} from {source}; bars for {len(bars)}; {years} years; SPY filter {'on' if spy_ok else 'MISSING'}")
-    tr = run(bars, spy_ok)
+    ix_bars = {k: v for k, v in bars.items() if k in bs.INDEXES}
+    tr = run({k: v for k, v in bars.items() if k not in bs.INDEXES}, spy_ok)
     tr.to_csv("breakout_backtest_trades.csv", index=False)
     s = summarize(tr)
     s.to_csv("breakout_backtest_summary.csv", index=False)
@@ -203,6 +204,15 @@ def main():
         by = sub.groupby("year").ret.agg(["count", "mean", lambda r: (r > 0).mean() * 100]).round(2)
         by.columns = ["trades", "avg%", "win%"]
         print(f"\n--- by year: {g} | {st} | {ex} ---\n" + by.to_string())
+    if ix_bars:
+        ix = run(ix_bars, spy_ok)
+        ix = ix[ix.group.isin(["breakout", "mkt_ok", "random"])]
+        s_ix = summarize(ix) if len(ix) else pd.DataFrame()
+        print("\n=== INDEXES ONLY (SPY, QQQ, IWM, DIA) ===\n" + s_ix.sort_values(["group", "avg%"], ascending=[True, False]).to_string(index=False))
+        per = ix[(ix.group == "breakout") & (ix.stop == "base low") & (ix.exit == "3R target")]
+        if len(per):
+            print("\n--- per index: breakout | base low | 3R target ---\n"
+                  + per.groupby("symbol").ret.agg(["count", "mean", lambda r: (r > 0).mean() * 100]).round(2).to_string())
     summ = os.getenv("GITHUB_STEP_SUMMARY")
     if summ:
         with open(summ, "a") as fh:
