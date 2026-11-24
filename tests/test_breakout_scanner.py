@@ -121,7 +121,9 @@ def test_handle_commands_buy_sell_list(monkeypatch):
     assert "Stopped tracking" in out and state["positions"] == {}
 
 
-def test_confirm_needs_two_checks_25_min_apart():
+def test_confirm_needs_two_checks_25_min_apart(monkeypatch):
+    assert bs.confirm({}, "ABC", dt.datetime(2026, 11, 12, 10, 0, tzinfo=bs.CT))  # off by default
+    monkeypatch.setattr(bs, "CONFIRM_MINUTES", 25)
     state = {}
     t0 = dt.datetime(2026, 11, 12, 10, 0, tzinfo=bs.CT)
     assert not bs.confirm(state, "ABC", t0)                          # first sighting

@@ -5,9 +5,10 @@ Two kinds of alerts, labelled separately:
                   sitting just under its 20-day high (resistance). Sent once
                   each weekday morning.
   🚀 BREAKOUT   - "broke out, buy signal": price cleared that 20-day high on
-                  heavy volume AND was still above it at the next check 30 min
-                  later. No alerts in the first hour (9:30 CT on) and none while
-                  SPY is below its 50-day average. Each stock alerted at most once a day.
+                  heavy volume. None while SPY is below its 50-day average (the
+                  5-year backtest: that filter raised the average trade; waiting
+                  for the breakout to hold until the close lowered it, so the
+                  wait-to-confirm rule is off). Each stock alerted at most once a day.
 
 Universe: US stocks (no ETFs/funds), price > $10, market cap > $1B,
 avg volume > 1M - from FMP's company screener, falling back to FMP's
@@ -61,8 +62,9 @@ WATCH_TOP_N = 10
 TRIGGER_MIN_BREAK = 0.2  # at least 0.2% above resistance
 TRIGGER_MAX_EXT = 5.0    # skip if already >5% above (too extended to chase)
 TRIGGER_MIN_RVOL = 1.5   # today's volume pace vs the 50-day average
-NO_TRIGGER_BEFORE = dt.time(9, 30)  # first hour skipped: opening volume makes every stock look "heavy"
-CONFIRM_MINUTES = 25     # must still be above the level at a check at least this long after first seen
+NO_TRIGGER_BEFORE = dt.time(8, 30)  # e.g. 9:30 to skip the first hour (untested on daily bars, so off)
+CONFIRM_MINUTES = 0      # >0: must still be above the level this many minutes later. Off: the backtest's
+                         # closest stand-in (wait for the close) cut the average trade from 1.8% to 0.9%
 
 # Exits (best in the 5-year backtest)
 STOP_MAX_PCT = 10.0      # stop = 10-day low, but never more than 10% below entry
@@ -234,6 +236,8 @@ def market_ok(spy_done):
 
 def confirm(state, sym, now_ct):
     """True once `sym` has met the breakout rules at two checks >= CONFIRM_MINUTES apart."""
+    if CONFIRM_MINUTES <= 0:
+        return True
     pend = state.setdefault("pending", {})
     first = pend.get(sym)
     if first is None:
@@ -279,7 +283,7 @@ def fmt_watch(today, picks, source, scanned, market=None):
 def fmt_trigger(now_ct, hits):
     e = html.escape
     lines = [f"<b>🚀 BREAKOUT — buy signal — {now_ct.strftime('%-I:%M %p')} CT</b>",
-             "<i>Broke above its 20-day high on heavy volume and held there for 30+ min.</i>"]
+             "<i>Broke above its 20-day high on heavy volume, with the market in an uptrend.</i>"]
     for s, t, st, was_watched in hits:
         tags = []
         if was_watched:
